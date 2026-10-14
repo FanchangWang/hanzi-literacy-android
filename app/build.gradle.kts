@@ -3,6 +3,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Regenerates app/src/main/assets/{draw_all,explanation_all,voice} from the
+// cnchar-data checkout. The merged files are committed, so a clean clone
+// builds without running this; it only refreshes them when the source moves.
+val cncharDataDir: String =
+    (findProperty("cncharDataDir") as String?)
+        ?: "C:\\Users\\guyue\\code\\pupil-learning-tool\\cnchar-data\\cnchar-data"
+
+val mergeAssets by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Merge cnchar-data per-char JSON into sharded assets."
+
+    val outDir = layout.projectDirectory.dir("src/main/assets").asFile
+    inputs.dir(File(cncharDataDir)).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(outDir)
+
+    commandLine(
+        "uv", "run", "$rootDir/tools/merge_assets.py", cncharDataDir, outDir.absolutePath
+    )
+}
+
 android {
     namespace = "com.pupil.hanzi"
     compileSdk {
@@ -35,6 +55,8 @@ android {
         compose = true
     }
 }
+
+tasks.named("preBuild") { dependsOn(mergeAssets) }
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
