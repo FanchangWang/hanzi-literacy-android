@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Regenerates app/src/main/assets/{draw_all,explanation_all,voice} from the
@@ -10,7 +11,7 @@ val cncharDataDir: String =
     (findProperty("cncharDataDir") as String?)
         ?: "C:\\Users\\guyue\\code\\pupil-learning-tool\\cnchar-data\\cnchar-data"
 
-val mergeAssets by tasks.registering(Exec::class) {
+val mergeAssets = tasks.register<Exec>("mergeAssets") {
     group = "build setup"
     description = "Merge cnchar-data per-char JSON into sharded assets."
 
@@ -71,6 +72,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.houbb.pinyin)
+    implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
