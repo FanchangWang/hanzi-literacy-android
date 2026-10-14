@@ -33,21 +33,38 @@ Android Studio 已生成 **Compose Activity** 骨架并提交（`70396f4`）。*
 
 ## 2. 技术栈
 
-### 2.1 构建与语言（**与现有骨架一致，不要改动**）
+### 2.1 构建与语言
 
-以下版本已随骨架落地并**编译通过**，且本机 Gradle 缓存中已有对应构件，改动会导致重新下载几百 MB 并引入未知兼容性风险：
+**当前状态：已升级到最新稳定版，`assembleDebug` 通过。**
 
-| 组件 | 版本 | 来源 |
+| 组件 | 版本 | 说明 |
 |---|---|---|
-| Gradle | **9.8.0** | `gradle/wrapper/gradle-wrapper.properties` |
-| Android Gradle Plugin | **9.4.0** | `gradle/libs.versions.toml` |
-| Kotlin | **2.2.10** | 同上 |
-| Compose BOM | **2026.02.01** | 同上 |
-| JDK | 17（`compileOptions` 现为 `VERSION_11`，可提到 17） | `app/build.gradle.kts` |
+| Gradle | **9.8.0** | Android Studio 初始模板是 9.6.0，已手动升级 |
+| Android Gradle Plugin | **9.4.1** | 模板是 9.4.0，已升级 |
+| Kotlin | **2.4.21** | 模板是 2.2.10，已升级（2.5.0 仍是 Beta，不用） |
+| Compose BOM | **2026.09.00** | 模板是 2026.02.01，已升级 |
+| JDK | **17** | `compileOptions` 已从 `VERSION_11` 提到 `VERSION_17` |
 
-**已验证：AGP 9.4.0 无需 `org.jetbrains.kotlin.android` 插件。** 骨架的 `app/build.gradle.kts` 只 apply 了 `android.application` + `kotlin.compose` 两个插件，Kotlin 代码正常编译。此前草稿里"AGP 9 内置 Kotlin、不能再 apply kotlin-android"的说法**属实**，可以直接沿用骨架配置。
+> ⚠️ **不要退回模板的旧版本。** Android Studio 的项目模板刻意锁定在较旧版本（AGP 9.4.0 / Kotlin 2.2.10 / Compose BOM 2026.02.01），这是模板的保守策略，**不是推荐配置**。上述版本已核实为各组件的最新稳定版并编译通过。
 
-### 2.2 关于构建输出里的 deprecation 警告（**正常，不必处理**）
+**已验证：AGP 9.4.1 无需 `org.jetbrains.kotlin.android` 插件。** `app/build.gradle.kts` 只 apply `android.application` + `kotlin.compose`，Kotlin 代码正常编译。此前草稿里"AGP 9 内置 Kotlin、不能再 apply kotlin-android"的说法**属实**。
+
+### 2.2 已加入的依赖
+
+`libs.versions.toml` 中已配置好，接手的代码直接用即可：
+
+| 依赖 | 版本 | 用途 |
+|---|---|---|
+| `androidx.compose:compose-bom` | 2026.09.00 | 覆盖 ui / material3 / foundation / animation |
+| `androidx.core:core-ktx` | 1.19.1 | |
+| `androidx.activity:activity-compose` | 1.13.0 | |
+| `androidx.lifecycle:lifecycle-runtime-ktx` | 2.11.0 | |
+| `androidx.lifecycle:lifecycle-runtime-compose` | 2.11.0 | `collectAsStateWithLifecycle()` |
+| `androidx.lifecycle:lifecycle-viewmodel-compose` | 2.11.0 | ViewModel |
+| `androidx.datastore:datastore-preferences` | 1.2.1 | 三个开关的持久化 |
+| `com.github.houbb:pinyin` | 0.4.0 | 汉字→拼音（§3.2） |
+
+### 2.3 关于构建输出里的 deprecation 警告（**正常，不必处理**）
 
 每次编译都会出现：
 
@@ -57,28 +74,17 @@ The Configuration.setVisible(boolean) method has been deprecated.
   → scheduled to be removed in Gradle 11
 ```
 
-`--warning-mode all` 全量输出确认：**仅此一条，且不指向项目任何文件** —— 是 AGP 9.4.0 内部调用了 Gradle 的 `setVisible()`。Gradle 10 之前无影响，与本项目代码无关。`problems-report.html` 那个链接是 Gradle 9.x 的正常输出格式，不是错误。
+与本项目代码无关。`problems-report.html` 那个链接是 Gradle 9.x 的正常输出格式，不是错误。
 
-### 2.3 AndroidX 依赖
+### 2.4 可选依赖：自然语音
 
-骨架已含：`compose-bom` / `activity-compose` / `material3` / `ui` / `ui-graphics` / `core-ktx` / `lifecycle-runtime-ktx`。
+坐标 `sherpa-onnx-1.13.8.aar` —— **不在 Maven**，需从 GitHub Release 下载后放进 `app/libs/`：
 
-开发时需在 `libs.versions.toml` **补充**（版本跟随已装的稳定线，不要跳到最新）：
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar
+```
 
-| 依赖 | 用途 |
-|---|---|
-| `androidx.lifecycle:lifecycle-viewmodel-compose` | ViewModel（§7） |
-| `androidx.lifecycle:lifecycle-runtime-compose` | `collectAsStateWithLifecycle()` |
-| `androidx.datastore:datastore-preferences` | 三个开关的持久化（§5.5） |
-
-Compose BOM 已覆盖 ui / material3 / foundation / animation，无需单独声明版本。
-
-### 2.4 第三方依赖（只有两个）
-
-| 依赖 | 坐标 | 用途 |
-|---|---|---|
-| 拼音 | `com.github.houbb:pinyin:0.4.0` | 汉字→拼音（多音字 + 声调）。传递依赖 `heaven:0.2.0`、`nlp-common:0.0.5` 自动带入 |
-| 自然语音（可选） | `sherpa-onnx-1.13.8.aar` | **不在 Maven**，需从 GitHub Release 下载后放进 `app/libs/`：<br>`https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar`<br>**整条链路可选，不进默认构建**（§8风险 5） |
+**整条链路可选，不进默认构建**（体积见 §8 风险 5）。
 
 **刻意不引入**：ExoPlayer/Media3（太重，用系统 `MediaPlayer`）、Lottie、任何汉字笔画第三方库（不存在，见 §3.1）。
 
@@ -572,3 +578,4 @@ HanziLiteracy/
 | 拼音走 houbb | ✅ 结论正确，本文补充了 API 实测细节与声母/韵母的 SPI 坑 |
 | 未涉及 sherpa-onnx | 本文新增，含 4 组实测结论 |
 | 未涉及字体 | 本文新增，含字体元数据解析 + 穷举覆盖验证 + 声调转换规则 |
+| 建议 Kotlin 2.4.21 但未指出模板锁在 2.2.10 | 已升级到最新稳定版，勿退回模板值（§2.1） |
