@@ -34,3 +34,7 @@ google-services.json
 
 # TTS probe scratch (models and venvs are fetched, not committed)
 .tts/
+
+
+# Release output (APK, R8 mapping, metadata) is a build product
+app/release/
