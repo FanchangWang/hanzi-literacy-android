@@ -9,7 +9,9 @@ This merges them into sharded files, keeping voice/ as individual mp3s
 draw_all/        shard-<bucket>.json   8 shards, ~6.7MB largest
 explanation_all/ shard-<bucket>.json   shard by the definition's first char
 
-Shard key = codepoint >> 12, i.e. 4096-codepoint buckets. Matches how the
+Shard key = codepoint >> 9, i.e. 512-codepoint buckets: a shard is a few
+hundred KB rather than 6MB, so reading one character does not parse megabytes.
+Matches how the
 app indexes: look up shard by char codepoint, then look up the entry.
 
 Usage:  uv run tools/merge_assets.py [source_dir] [out_dir]
@@ -26,7 +28,7 @@ DEFAULT_OUT = os.path.join(
 )
 
 SKIP = {"package.json"}
-SHARD_BITS = 12
+SHARD_BITS = 9
 
 
 def shard_of(ch: str) -> str:

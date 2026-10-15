@@ -1,5 +1,6 @@
 package com.pupil.hanzi.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,15 +11,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -27,27 +27,37 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pupil.hanzi.data.Settings
 
 /**
- * Single screen with two mutually exclusive states: the character grid, and
- * the text field. The three switches stay put in both.
+ * Single screen with two mutually exclusive states: the character grid and the
+ * text field. The switches stay put in both.
  */
 @Composable
 fun MainScreen(viewModel: HanziViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
+
+    // Holding the screen awake is a window flag, so it follows the setting
+    // rather than being pushed on and popped by hand.
+    LaunchedEffect(state.settings.keepScreenOn) {
+        if (state.settings.keepScreenOn) {
+            context.keepScreenAwake()
+        } else {
+            context.allowScreenToSleep()
+        }
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -70,6 +80,7 @@ fun MainScreen(viewModel: HanziViewModel) {
                 onShowPinyin = viewModel::setShowPinyin,
                 onAnimate = viewModel::setAnimate,
                 onSpeak = viewModel::setSpeak,
+                onKeepScreenOn = viewModel::setKeepScreenOn,
             )
             HorizontalDivider()
 
@@ -77,11 +88,13 @@ fun MainScreen(viewModel: HanziViewModel) {
                 Mode.VIEWING -> ViewingPane(
                     state = state,
                     onSpeak = viewModel::speak,
+                    onPreviewReading = viewModel::speakReading,
                     onSpeakAll = viewModel::speakAll,
-                    onCloseDetail = viewModel::closeDetail,
+                    onStopPlaying = viewModel::stopPlaying,
                     onEdit = viewModel::startEditing,
                     onOpenDetail = viewModel::openDetail,
                     onSelectReading = viewModel::selectReading,
+                    onCloseDetail = viewModel::closeDetail,
                 )
 
                 Mode.EDITING -> EditingPane(
@@ -95,13 +108,14 @@ fun MainScreen(viewModel: HanziViewModel) {
     }
 }
 
-/** The three switches. Always visible. */
+/** The switches. Always visible. */
 @Composable
 private fun SettingsBar(
     settings: Settings,
     onShowPinyin: (Boolean) -> Unit,
     onAnimate: (Boolean) -> Unit,
     onSpeak: (Boolean) -> Unit,
+    onKeepScreenOn: (Boolean) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -131,6 +145,11 @@ private fun SettingsBar(
             selected = settings.speakCharacters,
             onClick = { onSpeak(!settings.speakCharacters) },
             label = { Text("语音") },
+        )
+        FilterChip(
+            selected = settings.keepScreenOn,
+            onClick = { onKeepScreenOn(!settings.keepScreenOn) },
+            label = { Text("屏幕常亮") },
         )
     }
 }
@@ -169,7 +188,9 @@ private fun EditingPane(
 private fun ViewingPane(
     state: HanziUiState,
     onSpeak: (Int) -> Unit,
+    onPreviewReading: (Int, Int) -> Unit,
     onSpeakAll: () -> Unit,
+    onStopPlaying: () -> Unit,
     onCloseDetail: () -> Unit,
     onEdit: () -> Unit,
     onOpenDetail: (Int) -> Unit,
@@ -185,7 +206,13 @@ private fun ViewingPane(
             )
         } else {
             val config = LocalConfiguration.current
-            val columns = if (config.screenWidthDp >= 900) 6 else 4
+            // The original tool is a fixed 120px cell, which on a 2560x1600
+            // tablet yields 20 columns by 7 rows. A hard-coded 6 columns made
+            // each cell enormous and showed barely two rows, so the count
+            // follows the screen: aim for a cell around 96dp regardless of
+            // how wide the display is.
+            val targetCell = 96
+            val columns = (config.screenWidthDp / targetCell).coerceIn(4, 14)
             CharGrid(
                 cells = state.cells,
                 showPinyin = state.settings.showPinyin,
@@ -212,10 +239,21 @@ private fun ViewingPane(
                 Text("编辑")
             }
             if (state.settings.speakCharacters && !state.isEmpty) {
-                Button(onClick = onSpeakAll) {
-                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("播放全部文本")
+                // One button, two jobs: it starts the phrase and, while one is
+                // running, stops it. Pressing it again mid-phrase used to queue
+                // a second playback on top of the first.
+                if (state.playing) {
+                    Button(onClick = onStopPlaying) {
+                        Icon(Icons.Filled.Stop, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("停止播放")
+                    }
+                } else {
+                    Button(onClick = onSpeakAll) {
+                        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("播放全部文本")
+                    }
                 }
             }
         }
@@ -230,11 +268,21 @@ private fun ViewingPane(
                 val cellIndex = state.cells.indexOfFirst { it.char == detail.cell.char }
                 if (cellIndex >= 0) onSelectReading(cellIndex, index)
             },
-            onSpeak = {
+            onPreviewReading = { readingIndex ->
                 val cellIndex = state.cells.indexOfFirst { it.char == detail.cell.char }
-                if (cellIndex >= 0) onSpeak(cellIndex)
+                if (cellIndex >= 0) onPreviewReading(cellIndex, readingIndex)
             },
             onDismiss = onCloseDetail,
         )
     }
+}
+
+private fun android.content.Context.keepScreenAwake() {
+    val window = (this as? android.app.Activity)?.window ?: return
+    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+}
+
+private fun android.content.Context.allowScreenToSleep() {
+    val window = (this as? android.app.Activity)?.window ?: return
+    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 }

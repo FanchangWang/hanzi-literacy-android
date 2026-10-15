@@ -8,23 +8,21 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.pupil.hanzi.data.StrokeData
+import com.pupil.hanzi.ui.theme.LocalCanvasColors
 import com.pupil.hanzi.stroke.StrokeStyle
+import com.pupil.hanzi.stroke.StrokeTimeline
 import com.pupil.hanzi.stroke.drawCharacter
-
-/** Milliseconds each stroke takes, plus the pause between strokes. */
-private const val STROKE_MS = 420
-private const val GAP_MS = 260
 
 /**
  * Draws a character, optionally animating the stroke order on a loop.
  *
- * With animation off this is just a static render, so the same composable
- * covers both the grid cells and the detail sheet.
+ * Timing comes from [StrokeTimeline]: each stroke's duration is proportional
+ * to its pen length, so a long sweeping stroke and the single stroke of 一 both
+ * read clearly. A fixed per-stroke time made 一 crawl through a 15-stroke
+ * character.
  */
 @Composable
 fun StrokeAnimation(
@@ -32,27 +30,33 @@ fun StrokeAnimation(
     paths: List<android.graphics.Path>,
     animate: Boolean,
     modifier: Modifier = Modifier,
-    style: StrokeStyle = StrokeStyle(),
+    style: StrokeStyle? = null,
 ) {
-    val strokeCount = data.strokeCount.coerceAtLeast(1)
+    val canvas = LocalCanvasColors.current
+    val base = style ?: StrokeStyle(
+        gridColor = canvas.grid,
+        outlineColor = canvas.outline,
+        strokeColor = canvas.stroke,
+        radicalColor = canvas.radical,
+        guideColor = canvas.guide,
+    )
 
     if (!animate) {
         Canvas(modifier) {
-            drawCharacter(data, paths, size.minDimension, style.copy(progress = -1f))
+            drawCharacter(data, paths, size.minDimension, base.copy(progress = -1f))
         }
         return
     }
 
-    // One full pass over every stroke, plus the gaps.
-    val cycleMs = (STROKE_MS + GAP_MS) * strokeCount
-    val progress = remember(strokeCount) { Animatable(0f) }
+    val timeline = remember(data, paths) { StrokeTimeline(data, paths) }
+    val progress = remember(timeline) { Animatable(0f) }
 
-    LaunchedEffect(strokeCount, data) {
+    LaunchedEffect(timeline) {
         progress.snapTo(0f)
         progress.animateTo(
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = cycleMs, easing = LinearEasing),
+                animation = tween(durationMillis = timeline.cycleMs, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart,
             ),
         )
@@ -60,6 +64,6 @@ fun StrokeAnimation(
 
     val current = progress.value
     Canvas(modifier) {
-        drawCharacter(data, paths, size.minDimension, style.copy(progress = current))
+        drawCharacter(data, paths, size.minDimension, base.copy(progress = current))
     }
 }

@@ -1,14 +1,17 @@
 package com.pupil.hanzi.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -32,14 +35,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pupil.hanzi.data.StrokeData
+import com.pupil.hanzi.ui.theme.LocalCanvasColors
 import com.pupil.hanzi.stroke.StrokeGeometry
-import com.pupil.hanzi.stroke.StrokeStyle
-import com.pupil.hanzi.stroke.drawCharacter
 import java.util.IdentityHashMap
+import kotlin.math.max
 
 /** Characters laid out in a wrapping grid, one card each. */
 @Composable
@@ -54,13 +59,15 @@ fun CharGrid(
     modifier: Modifier = Modifier,
     columns: Int = 6,
 ) {
-    // Parsing SVG paths is not free; cache per StrokeData instance.
+    // Parsing SVG paths is not free; cache per StrokeData instance. Two
+    // characters whose data is equal parse to the same paths, so sharing the
+    // entry is correct rather than a collision.
     val pathCache = remember { IdentityHashMap<StrokeData, List<android.graphics.Path>>() }
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         modifier = modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+        contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -81,6 +88,14 @@ fun CharGrid(
     }
 }
 
+/**
+ * One character: a pinyin cell above a character cell, then the speaker.
+ *
+ * Both cells are the same width and both keep a border, so a punctuation mark
+ * lines up with the hanzi around it. Punctuation repeats itself in the pinyin
+ * cell in grey, as the original tool does, and takes the character cell with
+ * the same box -- no grid lines, the mark simply sits in the lower left.
+ */
 @Composable
 private fun CharCard(
     cell: CharCell,
@@ -96,35 +111,21 @@ private fun CharCard(
     val reading = cell.reading
 
     Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-            .padding(6.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (showPinyin && reading != null) {
-            if (cell.isPolyphone) {
-                Box {
-                    PolyphonePinyin(
-                        reading = reading,
-                        fontSize = 16.sp,
-                        onClick = { pickerOpen = true },
-                    )
-                    if (pickerOpen) {
-                        ReadingPicker(
-                            cell = cell,
-                            onSelect = {
-                                onSelectReading(it)
-                                pickerOpen = false
-                            },
-                            onDismiss = { pickerOpen = false },
-                        )
-                    }
-                }
-            } else {
-                PinyinText(reading = reading, fontSize = 16.sp)
-            }
+        if (showPinyin) {
+            PinyinCell(
+                cell = cell,
+                reading = reading,
+                pickerOpen = pickerOpen,
+                onOpenPicker = { pickerOpen = true },
+                onPick = { idx ->
+                    onSelectReading(idx)
+                    pickerOpen = false
+                },
+                onDismissPicker = { pickerOpen = false },
+            )
             Spacer(Modifier.height(4.dp))
         }
 
@@ -153,6 +154,88 @@ private fun CharCard(
     }
 }
 
+/**
+ * The pinyin cell.
+ *
+ * A polyphone tints the WHOLE cell, matching `.pinyin.has-poly` in the
+ * original stylesheet -- the background belongs to the bordered box, not to
+ * the few glyphs inside it.
+ */
+@Composable
+private fun PinyinCell(
+    cell: CharCell,
+    reading: com.pupil.hanzi.data.PinyinReading?,
+    pickerOpen: Boolean,
+    onOpenPicker: () -> Unit,
+    onPick: (Int) -> Unit,
+    onDismissPicker: () -> Unit,
+) {
+    val canvas = LocalCanvasColors.current
+    val polyTint = MaterialTheme.colorScheme.surfaceVariant
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(
+                when {
+                    // The whole cell is tinted for a polyphone.
+                    cell.isPolyphone -> polyTint
+                    else -> canvas.cellBackground
+                },
+            )
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(3.dp))
+            .then(
+                if (cell.isPolyphone && reading != null) {
+                    Modifier.clickable(onClick = onOpenPicker)
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            // Punctuation repeats itself in the pinyin cell, in grey.
+            cell.isPunctuation -> PunctuationPinyin(cell.char)
+            reading != null -> PinyinText(
+                reading = reading,
+                fontSize = 15.sp,
+                fontWeight = if (cell.isPolyphone) FontWeight.Bold else FontWeight.Normal,
+            )
+            else -> Text(
+                text = cell.char.toString(),
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (pickerOpen && reading != null) {
+            ReadingPicker(
+                cell = cell,
+                onSelect = onPick,
+                onDismiss = onDismissPicker,
+            )
+        }
+    }
+}
+
+/** The punctuation mark echoed in the pinyin cell. */
+@Composable
+private fun PunctuationPunctuationPlaceholder(char: Char) {
+    PunctuationPinyin(char)
+}
+
+@Composable
+private fun PunctuationPinyin(char: Char) {
+    Text(
+        text = char.toString(),
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold,
+        color = LocalCanvasColors.current.stroke.copy(alpha = 0.55f),
+    )
+}
+
 @Composable
 private fun CharacterBox(
     cell: CharCell,
@@ -161,24 +244,111 @@ private fun CharacterBox(
     onClick: () -> Unit,
 ) {
     val data = cell.strokes
+    val ready = data != null && paths.isNotEmpty()
+    val canvas = LocalCanvasColors.current
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(enabled = !cell.isPunctuation, onClick = onClick),
+            .clip(RoundedCornerShape(3.dp))
+            .clickable(enabled = ready, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        if (data != null && paths.isNotEmpty()) {
-            StrokeAnimation(data = data, paths = paths, animate = animate)
-        } else {
-            // Punctuation, or a character with no stroke data (one of the 2569
-            // that have a definition but no drawing).
+        when {
+            ready -> StrokeAnimation(
+                data = data,
+                paths = paths,
+                animate = animate,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            // Punctuation takes the same box as a character: same size, same
+            // border, same background, no grid lines. The mark sits in the
+            // lower left, where a workbook sets it.
+            cell.isPunctuation -> PunctuationCell(cell.char, Modifier.fillMaxSize())
+
+            // A character whose strokes have not arrived yet: show the empty
+            // grid rather than the glyph, so nothing is drawn and then covered.
+            else -> GridPlaceholder(Modifier.fillMaxSize(), canvas.grid, canvas.cellBackground)
+        }
+    }
+}
+
+/**
+ * A punctuation mark in a cell identical to a character's.
+ *
+ * The original sets the mark at 80px inside a 120px cell -- two thirds of the
+ * box -- so the glyph is scaled from the cell rather than fixed, otherwise it
+ * looks tiny next to a character drawn to fill its grid. It is placed toward
+ * the lower left, which is where a workbook sets a mark: punctuation occupies
+ * the empty corner of the square rather than the centre, and centring it makes
+ * it read as another character.
+ */
+@Composable
+private fun PunctuationCell(char: Char, modifier: Modifier = Modifier) {
+    val canvas = LocalCanvasColors.current
+    BoxWithConstraints(modifier = modifier) {
+        val cell = maxWidth
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val side = size.minDimension
+                val w = max(1f, side * 0.006f)
+                drawRect(
+                    color = canvas.cellBackground,
+                    topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                    size = androidx.compose.ui.geometry.Size(side, side),
+                    style = Stroke(width = w),
+                )
+                drawRect(
+                    color = canvas.grid,
+                    topLeft = androidx.compose.ui.geometry.Offset(w / 2, w / 2),
+                    size = androidx.compose.ui.geometry.Size(side - w, side - w),
+                    style = Stroke(width = w),
+                )
+            }
             Text(
-                text = cell.char.toString(),
-                fontSize = 44.sp,
-                color = MaterialTheme.colorScheme.onSurface,
+                text = char.toString(),
+                // 80/120 of the cell, matching the original stylesheet.
+                fontSize = (cell.value * 0.66f).sp,
+                color = canvas.stroke,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = (cell.value * 0.08f).dp, bottom = (cell.value * 0.06f).dp),
             )
         }
+    }
+}
+
+/** The empty mi zi ge shown while a character's stroke data is loading. */
+@Composable
+private fun GridPlaceholder(
+    modifier: Modifier = Modifier,
+    gridColor: Color,
+    background: Color,
+) {
+    Canvas(modifier) {
+        drawRect(color = background)
+        val side = size.minDimension
+        val w = max(1f, side * 0.006f)
+        drawRect(
+            color = gridColor,
+            topLeft = androidx.compose.ui.geometry.Offset.Zero,
+            size = androidx.compose.ui.geometry.Size(side, side),
+            style = Stroke(width = w),
+        )
+        val dash = PathEffect.dashPathEffect(floatArrayOf(side * 0.045f, side * 0.03f))
+        val half = side / 2f
+        drawLine(gridColor, androidx.compose.ui.geometry.Offset(half, 0f),
+            androidx.compose.ui.geometry.Offset(half, side), w, pathEffect = dash)
+        drawLine(gridColor, androidx.compose.ui.geometry.Offset(0f, half),
+            androidx.compose.ui.geometry.Offset(side, half), w, pathEffect = dash)
+        drawLine(gridColor, androidx.compose.ui.geometry.Offset.Zero,
+            androidx.compose.ui.geometry.Offset(side, side), w, pathEffect = dash)
+        drawLine(gridColor, androidx.compose.ui.geometry.Offset(side, 0f),
+            androidx.compose.ui.geometry.Offset(0f, side), w, pathEffect = dash)
     }
 }

@@ -53,7 +53,7 @@ def verify(sub, src_sub):
 
     # shard routing check
     bad_route = [ch for ch in merged
-                 if f"s{ord(ch) >> SHARD_BITS:x}"
+                 if f"s{ord(ch) >> 9:x}"
                  not in {n.split("-")[1].split(".")[0]
                          for n in os.listdir(os.path.join(ASSETS, sub))}]
     print(f"  routing errors: {len(bad_route)}")

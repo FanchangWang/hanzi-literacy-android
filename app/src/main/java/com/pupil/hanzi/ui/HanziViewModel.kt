@@ -1,6 +1,8 @@
 package com.pupil.hanzi.ui
 
 import android.app.Application
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pupil.hanzi.audio.AudioPlayer
@@ -12,11 +14,16 @@ import com.pupil.hanzi.data.SettingsStore
 import com.pupil.hanzi.data.StrokeData
 import com.pupil.hanzi.data.VoiceAssets
 import com.pupil.hanzi.data.WordDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** One cell in the character grid. */
 data class CharCell(
@@ -29,8 +36,6 @@ data class CharCell(
 ) {
     val reading: PinyinReading? get() = readings.getOrNull(selectedReading)
     val isPolyphone: Boolean get() = readings.size > 1
-    /** True when the dictionary offers a reading with no audio asset. */
-    val readingHasAudio: Boolean get() = reading != null
 }
 
 /** What the detail sheet is showing. */
@@ -52,6 +57,8 @@ data class HanziUiState(
     val settings: Settings = Settings.DEFAULT,
     val detail: DetailState? = null,
     val message: String? = null,
+    /** True while "play all" is running, so the button can offer to stop. */
+    val playing: Boolean = false,
 ) {
     val isEmpty: Boolean get() = cells.isEmpty()
 }
@@ -67,6 +74,16 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<HanziUiState> = _state.asStateFlow()
 
     init {
+        // Warm the pinyin dictionary off the critical path. Its first call
+        // initialises the segmentation data: 115ms on the JVM but 2.4s for four
+        // characters on the device, which was the entire wait after tapping
+        // confirm. Doing it here, in the background, means it is already hot
+        // by the time the user types.
+        viewModelScope.launch(Dispatchers.Default) {
+            val t = SystemClock.elapsedRealtime()
+            PinyinService.rawKeys('好')
+            Log.i(TAG, "pinyin warmup: ${SystemClock.elapsedRealtime() - t}ms")
+        }
         viewModelScope.launch {
             settingsStore.settings.collect { s ->
                 _state.update { it.copy(settings = s) }
@@ -93,17 +110,56 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { build(text) }
     }
 
+    /**
+     * Builds the grid in two stages so the screen appears immediately.
+     *
+     * Pinyin is pure computation and publishes first; the stroke drawings are
+     * patched into the same cells as their shards arrive, so a slow shard never
+     * holds up the whole grid.
+     */
     private suspend fun build(text: String) {
-        val cells = text.map { char ->
+        val t0 = SystemClock.elapsedRealtime()
+        val readingsByIndex: List<List<PinyinReading>> =
+            withContext(Dispatchers.Default) {
+                text.map { char -> PinyinService.readingsOf(char) }
+            }
+        val t1 = SystemClock.elapsedRealtime()
+        val cells = text.mapIndexed { i, char ->
             val punctuation = !PinyinService.isHan(char)
             CharCell(
                 char = char,
-                readings = PinyinService.readingsOf(char),
-                strokes = if (punctuation) null else assets.strokesOf(char),
+                readings = readingsByIndex[i],
+                strokes = null,
                 isPunctuation = punctuation,
             )
         }
         _state.update { it.copy(cells = cells) }
+        val t2 = SystemClock.elapsedRealtime()
+        Log.i(TAG, "build: pinyin=${t1 - t0}ms publish=${t2 - t1}ms")
+
+        val wanted = text.mapIndexedNotNull { i, c ->
+            if (PinyinService.isHan(c)) i to c else null
+        }
+        if (wanted.isEmpty()) return
+
+        val loaded = coroutineScope {
+            wanted.map { async(Dispatchers.IO) { assets.strokesOf(it.second) } }
+                .awaitAll()
+        }
+        val t3 = SystemClock.elapsedRealtime()
+        Log.i(TAG, "build: strokes=${t3 - t2}ms for ${wanted.size} chars")
+
+        var patched = cells
+        wanted.forEachIndexed { k, (index, _) ->
+            val data = loaded.getOrNull(k)
+            if (data != null && patched[index].strokes == null) {
+                patched = patched.toMutableList().also {
+                    it[index] = patched[index].copy(strokes = data)
+                }
+                _state.update { it.copy(cells = patched) }
+            }
+        }
+        Log.i(TAG, "build: total=${SystemClock.elapsedRealtime() - t0}ms")
     }
 
     /** Switch a polyphone to [index]. */
@@ -149,6 +205,10 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         settingsStore.setSpeakCharacters(value)
     }
 
+    fun setKeepScreenOn(value: Boolean) = viewModelScope.launch {
+        settingsStore.setKeepScreenOn(value)
+    }
+
     /** Play one character with its currently selected reading. */
     fun speak(charIndex: Int) {
         val cell = _state.value.cells.getOrNull(charIndex) ?: return
@@ -159,20 +219,45 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Play the whole text, using word-level readings where available. */
+    /** Play a specific reading without changing the selection. */
+    fun speakReading(charIndex: Int, readingIndex: Int) {
+        val cell = _state.value.cells.getOrNull(charIndex) ?: return
+        val reading = cell.readings.getOrNull(readingIndex) ?: return
+        viewModelScope.launch {
+            audio.play(reading.key, cell.readings.map { it.key })
+        }
+    }
+
+    /**
+     * Play the whole text.
+     *
+     * The keys come straight from the cells, never from a fresh dictionary
+     * lookup. Asking the dictionary again overrode whatever the user had
+     * selected for a polyphone, which is what made "play all" read 重 as zhòng
+     * after the user had switched it to chóng.
+     */
     fun speakAll() {
         val s = _state.value
-        val text = s.lastConfirmed
-        if (text.isBlank()) return
+        if (s.lastConfirmed.isBlank()) return
+        val hanCells = s.cells.filter { !it.isPunctuation && it.reading != null }
+        if (hanCells.isEmpty()) return
+        val keys = hanCells.map { it.reading!!.key }
+        _state.update { it.copy(playing = true) }
+        audio.playSequence(keys) { key -> keyListFor(key) }
+        // The sequence is fire-and-forget so the button stays responsive; the
+        // flag clears when the queue drains or when the user stops it.
         viewModelScope.launch {
-            val phrase = PinyinService.phraseKeys(text)
-            val perChar = text.filter { PinyinService.isHan(it) }
-                .map { PinyinService.defaultKey(it) }
-            // Prefer the phrase reading; fall back to per character if the
-            // dictionary did not produce a matching count.
-            val keys = if (phrase.size == perChar.size) phrase else perChar.filterNotNull()
-            audio.playSequence(keys) { key -> keyListFor(key) }
+            while (audio.isPlaying) {
+                kotlinx.coroutines.delay(100)
+            }
+            _state.update { it.copy(playing = false) }
         }
+    }
+
+    /** Stop the running phrase, if any. */
+    fun stopPlaying() {
+        audio.stop()
+        _state.update { it.copy(playing = false) }
     }
 
     /** Other readings of the character owning [key], for audio fallback. */
@@ -184,5 +269,9 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         audio.release()
+    }
+
+    private companion object {
+        const val TAG = "HanziViewModel"
     }
 }
