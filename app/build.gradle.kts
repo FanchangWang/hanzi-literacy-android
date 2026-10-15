@@ -60,6 +60,8 @@ android {
 tasks.named("preBuild") { dependsOn(mergeAssets) }
 
 dependencies {
+    // The prebuilt engine: it ships native .so per ABI and is not on Maven.
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

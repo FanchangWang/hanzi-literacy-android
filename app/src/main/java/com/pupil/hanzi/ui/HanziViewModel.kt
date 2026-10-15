@@ -15,7 +15,9 @@ import com.pupil.hanzi.data.SettingsStore
 import com.pupil.hanzi.data.StrokeData
 import com.pupil.hanzi.data.VoiceAssets
 import com.pupil.hanzi.data.WordDefinition
+import com.pupil.hanzi.tts.TtsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 /** One cell in the character grid. */
@@ -75,6 +78,10 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsStore = SettingsStore(app)
     private val voiceAssets = VoiceAssets(app)
     private val audio = AudioPlayer(app, voiceAssets)
+    private val tts = TtsRepository(app)
+
+    /** The running phrase, so a new one can replace it and Stop can end it. */
+    private var playbackJob: Job? = null
 
     private val _state = MutableStateFlow(HanziUiState())
     val state: StateFlow<HanziUiState> = _state.asStateFlow()
@@ -282,22 +289,48 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         if (s.lastConfirmed.isBlank()) return
         val hanCells = s.cells.filter { !it.isPunctuation && it.reading != null }
         if (hanCells.isEmpty()) return
-        val keys = hanCells.map { it.reading!!.key }
+
+        // The text as the user typed it, so punctuation and phrasing survive,
+        // plus the chosen reading of every character in the same order.
+        val text = s.lastConfirmed
+        val keys = s.cells.map { cell ->
+            if (cell.isPunctuation) "" else cell.reading?.key.orEmpty()
+        }
+
+        // Starting a new run cancels the previous one, so pressing the button
+        // twice does not layer two playbacks on top of each other.
+        playbackJob?.cancel()
         _state.update { it.copy(playing = true) }
-        audio.playSequence(keys) { key -> keyListFor(key) }
-        // The sequence is fire-and-forget so the button stays responsive; the
-        // flag clears when the queue drains or when the user stops it.
-        viewModelScope.launch {
-            while (audio.isPlaying) {
-                kotlinx.coroutines.delay(100)
+        playbackJob = viewModelScope.launch {
+            try {
+                val t0 = SystemClock.elapsedRealtime()
+                // The model reads the phrase in one voice; when it cannot spell
+                // it, the syllable library is slower but always exact on tone.
+                val spoken = tts.speak(text, keys)
+                Log.i(
+                    TAG,
+                    "speakAll: model=${if (spoken) "ok" else "unavailable"} " +
+                        "${SystemClock.elapsedRealtime() - t0}ms",
+                )
+                if (!spoken) {
+                    audio.playSequence(hanCells.map { it.reading!!.key }) { key -> keyListFor(key) }
+                }
+            } finally {
+                // Runs whether this finished on its own or was cancelled by
+                // Stop, so the button always returns to "play all". An earlier
+                // version cleared the flag only when the coroutine was still
+                // active, which left it stuck on "stop" after a cancel.
+                _state.update { it.copy(playing = false) }
             }
-            _state.update { it.copy(playing = false) }
         }
     }
 
     /** Stop the running phrase, if any. */
     fun stopPlaying() {
+        playbackJob?.cancel()
+        playbackJob = null
         audio.stop()
+        tts.stop()
         _state.update { it.copy(playing = false) }
     }
 

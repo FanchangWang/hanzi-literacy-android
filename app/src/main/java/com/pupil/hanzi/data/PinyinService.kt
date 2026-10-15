@@ -15,11 +15,9 @@ data class PinyinReading(
     val initial: String,
     /** Final, drawn in blue, e.g. "ǎo". */
     val final: String,
-) {
-    val hasAlternates: Boolean get() = false
-}
+)
 
-/** One character of the input with the reading that was chosen for it. */
+/** One character of the input with the reading chosen for it. */
 data class CharReading(
     val char: Char,
     val selected: PinyinReading,
@@ -32,14 +30,13 @@ data class CharReading(
  *
  * The order of the two steps is the whole point. Converting the sentence in a
  * single call segments internally but never re-reads the phrase dictionary, so
- * 长江 comes out as "zhǎng jiāng". Converting each *segmented word* instead
- * gives "cháng jiāng", because the word is then looked up as a unit:
+ * it still returns zhǎng for 长 in 长江. Converting each *segmented word* gives
+ * the right answer: 南京市 / 长江 / 大桥, and 长江 is then looked up as a unit.
  *
- *     HanLP.segment("南京市长江大桥") -> 南京市 / 长江 / 大桥
- *     convertToPinyin("长江")        -> cháng / jiāng
- *
- * Every character also keeps its own dictionary readings as alternates, so the
- * picker can still switch 重 between zhòng and chóng.
+ * The second invariant is that this returns exactly one [CharReading] per
+ * han character, in order. Callers walk the text pulling a reading per
+ * character, so a single dropped or duplicated entry shifts every syllable
+ * after it -- which showed up as 行 carrying 银's reading.
  */
 object PinyinService {
 
@@ -53,25 +50,41 @@ object PinyinService {
     }
 
     /**
-     * One [CharReading] per character of [text], in order. Punctuation and
-     * other non-hanzi produce no entry; the caller filters by [isHan].
+     * One [CharReading] per han character of [text], in order. Punctuation and
+     * anything else yields nothing.
      */
     fun readings(text: String): List<CharReading> {
         val out = ArrayList<CharReading>(text.length)
         for (term in HanLP.segment(text)) {
             out += readingsForTerm(term)
         }
-        return out
+        // HanLP can drop or reshape a segment; pad or trim so the caller can
+        // index this in step with the text.
+        val han = text.filter { isHan(it) }
+        if (out.size == han.length) return out
+        if (out.size > han.length) return out.take(han.length)
+        val rebuilt = ArrayList<CharReading>(han.length)
+        var cursor = 0
+        for (c in han) {
+            val r = out.getOrNull(cursor)
+            if (r != null && r.char == c) {
+                rebuilt += r
+            } else {
+                // Recover the character's own first reading so the slot is
+                // never empty and the remaining ones stay in place.
+                val fb = firstOf(c) ?: continue
+                rebuilt += CharReading(c, toReading(fb), allOf(c).filter { it.key != fb.let { keyOf(it) } })
+            }
+            cursor++
+        }
+        return rebuilt
     }
 
-    /**
-     * The chosen key per character, in order. This is what the audio and the
-     * sherpa lexicon are indexed by.
-     */
+    /** The chosen key per character, in order. */
     fun defaultKeys(text: String): List<String> = readings(text).map { it.selected.key }
 
     /**
-     * Readings for one segmented word.
+     * Readings for one segmented word, one entry per han character.
      *
      * The phrase reading decides the primary; each character also keeps its own
      * dictionary readings as alternates, minus the one already chosen, so the
@@ -87,29 +100,35 @@ object PinyinService {
             emptyList()
         }
 
-        return word.mapIndexedNotNull { i, ch ->
-            if (!isHan(ch)) return@mapIndexedNotNull null
-            val chosen = phrase.getOrNull(i) ?: firstOf(ch) ?: return@mapIndexedNotNull null
+        val out = ArrayList<CharReading>(word.length)
+        for ((i, ch) in word.withIndex()) {
+            if (!isHan(ch)) continue
+            val chosen = phrase.getOrNull(i) ?: firstOf(ch) ?: continue
+            val chosenKey = keyOf(chosen)
             val chosenReading = toReading(chosen)
-            val alternates = allOf(ch).filter { it.key != chosenReading.key }
-            CharReading(char = ch, selected = chosenReading, alternates = alternates)
+            out += CharReading(
+                char = ch,
+                selected = chosenReading,
+                alternates = allOf(ch).filter { it.key != chosenKey },
+            )
         }
+        return out
     }
 
-    private fun firstOf(char: Char): Pinyin? = PinyinDictionary.get(char.toString())?.firstOrNull()
+    private fun firstOf(char: Char): Pinyin? =
+        PinyinDictionary.get(char.toString())?.firstOrNull()
 
     private fun allOf(char: Char): List<PinyinReading> =
-        PinyinDictionary.get(char.toString())
-            ?.map { toReading(it) }
-            .orEmpty()
+        PinyinDictionary.get(char.toString())?.map { toReading(it) }.orEmpty()
+
+    private fun keyOf(p: Pinyin): String =
+        p.getPinyinWithoutTone() + (if (p.getTone() > 0) p.getTone().toString() else "5")
 
     private fun toReading(p: Pinyin): PinyinReading {
         val display = p.getPinyinWithToneMark()
         val head = p.getHeadString()
         return PinyinReading(
-            // "cháng" -> "chang2"; an unmarked syllable is treated as neutral,
-            // which matches the dictionary's own convention.
-            key = p.getPinyinWithoutTone() + (if (p.getTone() > 0) p.getTone().toString() else "5"),
+            key = keyOf(p),
             display = display,
             initial = if (head.isEmpty()) "" else display.substring(0, head.length),
             final = if (head.isEmpty()) display else display.substring(head.length),
