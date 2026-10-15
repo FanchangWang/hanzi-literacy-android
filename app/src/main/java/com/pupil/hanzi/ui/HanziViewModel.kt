@@ -208,26 +208,54 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         Log.i(TAG, "build: total=${SystemClock.elapsedRealtime() - t0}ms")
+
+        // Now that the cells carry the chosen readings, build the audio so
+        // pressing play is instant.
+        prebuildSpeech()
     }
 
-    /** Switch a polyphone to [index]. */
-    fun selectReading(charIndex: Int, index: Int) = _state.update { s ->
-        s.copy(
-            cells = s.cells.mapIndexed { i, cell ->
-                if (i == charIndex && index in cell.readings.indices) {
-                    cell.copy(selectedReading = index)
-                } else {
-                    cell
-                }
-            },
-            detail = s.detail?.let { d ->
-                if (d.cell.char == s.cells.getOrNull(charIndex)?.char) {
-                    d.copy(cell = s.cells[charIndex])
-                } else {
-                    d
-                }
-            },
-        )
+    /**
+     * Build the audio for the current text in the background.
+     *
+     * Runs on confirm and again after a polyphone switch, so the play button
+     * normally finds the audio ready. If the user presses play first,
+     * [speakAll] waits for this rather than starting a second build.
+     */
+    private fun prebuildSpeech() {
+        val s = _state.value
+        if (s.lastConfirmed.isBlank() || s.detail != null) return
+        val text = s.lastConfirmed
+        val keys = s.cells.map { cell ->
+            if (cell.isPunctuation) "" else cell.reading?.key.orEmpty()
+        }
+        viewModelScope.launch { tts.prepare(text, keys) }
+    }
+
+    /**
+     * Switch a polyphone to [index] and rebuild the audio for it, since the
+     * reading is baked into what was synthesised.
+     */
+    fun selectReading(charIndex: Int, index: Int) {
+        _state.update { s ->
+            s.copy(
+                cells = s.cells.mapIndexed { i, cell ->
+                    if (i == charIndex && index in cell.readings.indices) {
+                        cell.copy(selectedReading = index)
+                    } else {
+                        cell
+                    }
+                },
+                detail = s.detail?.let { d ->
+                    if (d.cell.char == s.cells.getOrNull(charIndex)?.char) {
+                        d.copy(cell = s.cells[charIndex])
+                    } else {
+                        d
+                    }
+                },
+            )
+        }
+        // The reading is baked into what was synthesised, so rebuild it.
+        prebuildSpeech()
     }
 
     /** Open the detail sheet for [charIndex]. */

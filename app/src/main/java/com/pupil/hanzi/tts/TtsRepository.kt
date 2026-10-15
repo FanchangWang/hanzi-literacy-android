@@ -6,24 +6,89 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
  * Speaks whole sentences with the sherpa model, falling back to the syllable
  * library when the model cannot spell a phrase.
  *
- * The engine is rebuilt for every utterance, because its lexicon is a
- * construction-time snapshot and the lexicon depends on what the user typed.
- * That costs about 600ms, which is the price of controlling the reading.
+ * Synthesis is the slow part: the engine is rebuilt around a lexicon that
+ * depends on what the user typed, then the sentence is generated, about 600ms
+ * plus the length of the audio. Both happen ahead of time in [prepare], once
+ * the text is confirmed, so pressing play only plays a buffer.
+ *
+ * The cache key is the text together with every chosen reading. Switching a
+ * polyphone changes the key and invalidates the audio, so it is rebuilt;
+ * replaying the same sentence with the same readings hits the cache and costs
+ * nothing.
  */
 class TtsRepository(private val context: Context) {
+
+    /** One prepared utterance. */
+    private class Prepared(
+        val samples: FloatArray,
+        val sampleRate: Int,
+    )
 
     @Volatile
     private var engine: NativeTts? = null
 
     @Volatile
     private var currentTrack: AudioTrack? = null
+
+    private val prepared = HashMap<String, Prepared>()
+
+    /**
+     * Guards the cache and, more importantly, the engine.
+     *
+     * onnxruntime is not reentrant: two coroutines inside generate() at once
+     * segfault inside libonnxruntime.so with no Java exception and nothing in
+     * the crash buffer. Switching a polyphone starts a rebuild while a play is
+     * still running, which is exactly that, so every path that touches the
+     * engine is serialised here.
+     */
+    private val engineLock = Mutex()
+
+    /** The utterance currently being built, so callers can wait on it. */
+    private var inFlight: Pair<String, CompletableDeferred<Boolean>>? = null
+
+    /**
+     * Build the audio for [text] ahead of time.
+     *
+     * Safe to call repeatedly: one already built is skipped, and one already
+     * being built is awaited rather than duplicated, because the engine can
+     * only hold a single lexicon.
+     */
+    suspend fun prepare(text: String, keys: List<String>) {
+        val key = cacheKey(text, keys) ?: return
+
+        val existing = engineLock.withLock {
+            if (prepared.containsKey(key)) {
+                ALREADY_DONE
+            } else {
+                inFlight?.takeIf { it.first == key }?.second
+            }
+        }
+        if (existing === ALREADY_DONE) return
+        if (existing != null) {
+            existing.await()
+            return
+        }
+
+        val deferred = CompletableDeferred<Boolean>()
+        engineLock.withLock { inFlight = key to deferred }
+
+        val built = withContext(Dispatchers.IO) { build(text, keys) }
+        engineLock.withLock {
+            built?.let { prepared[key] = it }
+            inFlight = null
+        }
+        deferred.complete(built != null)
+    }
 
     /**
      * Speak [text] as one sentence, with [keys] giving the chosen reading of
@@ -33,20 +98,67 @@ class TtsRepository(private val context: Context) {
      * use the syllable library instead.
      */
     suspend fun speak(text: String, keys: List<String>): Boolean {
-        // Both steps touch disk and the 61MB model, so none of it may run on
-        // the caller's dispatcher: viewModelScope is Main by default, and
-        // building the engine there froze the UI and delayed the button.
-        val ready = withContext(Dispatchers.IO) {
-            engine ?: NativeTts.create(context).also { engine = it }
-        } ?: return false
-        val samples = withContext(Dispatchers.IO) {
-            ready.synthesize(text, keys)
-        } ?: run {
+        val key = cacheKey(text, keys)
+
+        // Wait for any build that is running before touching the engine, so
+        // this never runs alongside one.
+        val waiting = engineLock.withLock {
+            inFlight?.takeIf { key != null && it.first == key }?.second
+        }
+        if (waiting != null) {
+            waiting.await()
+            engineLock.withLock { prepared[key] }?.let { hit ->
+                play(hit.samples, hit.sampleRate)
+                return true
+            }
+        }
+
+        key?.let { k ->
+            engineLock.withLock { prepared[k] }?.let { hit ->
+                play(hit.samples, hit.sampleRate)
+                return true
+            }
+        }
+
+        // Nothing built. If a build for a DIFFERENT utterance is running, it
+        // will rebuild the engine underneath us, so wait for it to finish.
+        engineLock.withLock { inFlight }?.let { (_, other) -> other.await() }
+
+        val t0 = SystemClock.elapsedRealtime()
+        val built = withContext(Dispatchers.IO) { build(text, keys) }
+        if (built == null) {
             Log.i(TAG, "model declined '$text'")
             return false
         }
-        play(samples, ready.sampleRate)
+        key?.let { k -> engineLock.withLock { prepared[k] = built } }
+        Log.i(TAG, "built on demand in ${SystemClock.elapsedRealtime() - t0}ms")
+        play(built.samples, built.sampleRate)
         return true
+    }
+
+    /**
+     * Builds [text], holding [engineLock] throughout: the engine is rebuilt
+     * when the lexicon changes, and generate() must not overlap with anything
+     * else touching it.
+     */
+    private suspend fun build(text: String, keys: List<String>): Prepared? =
+        engineLock.withLock {
+            val ready = engine ?: NativeTts.create(context).also { engine = it }
+                ?: return@withLock null
+            val samples = ready.synthesize(text, keys) ?: return@withLock null
+            if (samples.isEmpty()) return@withLock null
+            Prepared(samples, ready.sampleRate)
+        }
+
+    /**
+     * Identifies an utterance by its text and the reading of every character.
+     *
+     * Switching a polyphone changes it, which is what makes the cache
+     * invalidate; typing the same thing again does not.
+     */
+    private fun cacheKey(text: String, keys: List<String>): String? {
+        if (keys.size != text.length) return null
+        return text + " " + keys.joinToString(",")
     }
 
     /** Stop without tearing the engine down. */
@@ -60,7 +172,7 @@ class TtsRepository(private val context: Context) {
     }
 
     /**
-     * Streams the samples out, blocking until they finish.
+     * Streams the samples out, blocking until they finishes.
      *
      * The model emits normalised floats in [-1, 1]. They are converted to
      * int16 because AudioTrack.write(float[]) into a MODE_STATIC buffer is
@@ -101,10 +213,8 @@ class TtsRepository(private val context: Context) {
 
                 // Wait on the frame counter, not on playState. A MODE_STATIC
                 // track does not move itself out of PLAYING when the buffer
-                // runs out, so a loop that waits for STOPPED never returns:
-                // the audio finishes, the button stays on "stop", and
-                // speak() never reports back so the UI never advances past
-                // "synthesising".
+                // runs out, so a loop waiting for STOPPED never returns and
+                // the caller never learns the audio finished.
                 val deadline = SystemClock.elapsedRealtime() + MAX_PLAYBACK_MS
                 while (track.playbackHeadPosition < pcm.size) {
                     if (SystemClock.elapsedRealtime() > deadline) {
@@ -122,19 +232,25 @@ class TtsRepository(private val context: Context) {
             }
         }
 
+    /** Called from onCleared, where suspending is not possible. */
     fun release() {
         stop()
         engine?.release()
         engine = null
+        synchronized(this) {
+            prepared.clear()
+            inFlight = null
+        }
     }
 
     private companion object {
         const val TAG = "TtsRepository"
 
-        /**
-         * Upper bound on one utterance. A 40 character sentence is a few
-         * seconds; anything past this is a track that never reported progress.
-         */
+        /** Upper bound on one utterance. */
         const val MAX_PLAYBACK_MS = 120_000L
+
+        /** Marker for "already prepared", distinct from an in-flight job. */
+        private val ALREADY_DONE: CompletableDeferred<Boolean> =
+            CompletableDeferred<Boolean>().also { it.complete(true) }
     }
 }
