@@ -1,199 +1,47 @@
 package com.pupil.hanzi.data
 
-import com.github.houbb.pinyin.constant.enums.PinyinStyleEnum
-import com.github.houbb.pinyin.util.PinyinHelper
-
-/**
- * Converts the flat pinyin strings that come out of the dictionary
- * ("chong2") into what we actually display ("chóng").
- *
- * Four rules, each of which exists because the obvious implementation gets
- * it wrong. They are covered by PinyinServiceTest.
- *
- *  1. The tone mark goes on the syllable's *nucleus*, not its first vowel.
- *     you3 -> yǒu, wei4 -> wèi, jiao1 -> jiāo.
- *  2. Nucleus priority is a > o > e; otherwise the last true vowel.
- *     n/m/ê only count when they are the whole final.
- *  3. Always emit precomposed codepoints. "nǚ" is n + U+01DA; building it
- *     from n + u + U+0308 loses the umlaut dots.
- *  4. y and w are orthography, not initials. What follows them is already a
- *     complete final, and a u after y is plain u (yuán, never yüán).
- */
-object PinyinFormatter {
-
-    /** Tone-marked vowel forms, indexed by tone digit 1..5 (5 = neutral). */
-    private val TONE_VOWELS: Map<Char, List<Char>> = mapOf(
-        'a' to listOf('ā', 'á', 'ǎ', 'à', 'a'),
-        'o' to listOf('ō', 'ó', 'ǒ', 'ò', 'o'),
-        'e' to listOf('ē', 'é', 'ě', 'è', 'e'),
-        'i' to listOf('ī', 'í', 'ǐ', 'ì', 'i'),
-        'u' to listOf('ū', 'ú', 'ǔ', 'ù', 'u'),
-        'ü' to listOf('ǖ', 'ǘ', 'ǚ', 'ǜ', 'ü'),
-        'n' to listOf('n', 'n', 'ň', 'n', 'n'),
-        'm' to listOf('m', 'm', 'm', 'm', 'm'),
-        'ê' to listOf('ê', 'ế', 'ê', 'ề', 'ê'),
-        // 嗯 has real 2nd/3rd/4th tone forms (ń / ň / ǹ).
-        'n' to listOf('n', 'ń', 'ň', 'ǹ', 'n'),
-    )
-
-    /** True vowels, i.e. the ones that can carry a tone inside a final. */
-    private const val TRUE_VOWELS = "aoeiuü"
-
-    private val INITIALS = listOf(
-        "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l",
-        "g", "k", "h", "j", "q", "x", "r", "z", "c", "s", "y", "w",
-    ).sortedByDescending { it.length }
-
-    /**
-     * "chong2" -> "chóng". Returns [input] unchanged if it is malformed
-     * (no trailing tone digit, or a digit outside 1..5) so the UI can render
-     * something rather than throw.
-     */
-    fun format(syllable: String): String {
-        if (syllable.isEmpty()) return syllable
-        val toneDigit = syllable.last()
-        if (toneDigit !in '1'..'5') return syllable
-        val body = syllable.dropLast(1)
-        if (body.isEmpty()) return syllable
-
-        // Syllabic nasals are finals, not initials: "n4" is 嗯, not n + "".
-        // "ng2" (嗯 variant) likewise. Check these before the initial table,
-        // which would otherwise swallow the n as a normal initial.
-        if (body == "n" || body == "m" || body == "ng" || body == "hm") {
-            return markFinal(body, toneDigit - '1')
-        }
-
-        val initial = INITIALS.firstOrNull { body.startsWith(it) } ?: ""
-        val finalPart = body.substring(initial.length)
-        return initial + markFinal(finalPart, toneDigit - '1')
-    }
-
-    private fun markFinal(finalPart: String, toneIndex: Int): String {
-        // 'v' stands for ü in the dictionary's notation.
-        val f = finalPart.replace('v', 'ü')
-        if (f.isEmpty()) return f
-
-        // Rule 2: a > o > e wins outright.
-        for (v in "aoe") {
-            val i = f.indexOf(v)
-            if (i >= 0) {
-                return f.substring(0, i) + TONE_VOWELS.getValue(v)[toneIndex] + f.substring(i + 1)
-            }
-        }
-
-        // Otherwise the last true vowel.
-        val idx = f.indexOfLast { it in TRUE_VOWELS }
-        if (idx >= 0) {
-            return f.substring(0, idx) + TONE_VOWELS.getValue(f[idx])[toneIndex] + f.substring(idx + 1)
-        }
-
-        // n / m / ê as the whole final.
-        val table = TONE_VOWELS[f[0]]
-        return if (table != null) {
-            table[toneIndex] + f.substring(1)
-        } else {
-            f
-        }
-    }
-}
+import com.hankcs.hanlp.HanLP
+import com.hankcs.hanlp.dictionary.py.Pinyin
+import com.hankcs.hanlp.dictionary.py.PinyinDictionary
+import com.hankcs.hanlp.seg.common.Term
 
 /** One reading of one character, e.g. "好" -> hǎo / hào. */
 data class PinyinReading(
-    /** Dictionary key, "hao3". Doubles as the audio asset name. */
+    /** Audio asset name, "hao3". Doubles as the dictionary key. */
     val key: String,
-    /** Display form, "hǎo". */
+    /** Display form with the tone mark, "hǎo". */
     val display: String,
-    /** Initial red, e.g. "h". */
+    /** Initial, drawn in red, e.g. "h". */
     val initial: String,
-    /** Final blue, e.g. "ǎo". */
+    /** Final, drawn in blue, e.g. "ǎo". */
     val final: String,
+) {
+    val hasAlternates: Boolean get() = false
+}
+
+/** One character of the input with the reading that was chosen for it. */
+data class CharReading(
+    val char: Char,
+    val selected: PinyinReading,
+    /** The character's other readings, for the polyphone picker. */
+    val alternates: List<PinyinReading>,
 )
 
 /**
- * Character -> pinyin lookups.
+ * Character -> pinyin, using HanLP's dictionary and segmenter.
  *
- * The dictionary returns every reading a character has, including historical
- * ones ("一" -> yi1 yi2 yi4). Some of those have no matching audio asset,
- * so callers must be prepared for a missing mp3; see VoiceAssets.
+ * The order of the two steps is the whole point. Converting the sentence in a
+ * single call segments internally but never re-reads the phrase dictionary, so
+ * 长江 comes out as "zhǎng jiāng". Converting each *segmented word* instead
+ * gives "cháng jiāng", because the word is then looked up as a unit:
+ *
+ *     HanLP.segment("南京市长江大桥") -> 南京市 / 长江 / 大桥
+ *     convertToPinyin("长江")        -> cháng / jiāng
+ *
+ * Every character also keeps its own dictionary readings as alternates, so the
+ * picker can still switch 重 between zhòng and chóng.
  */
 object PinyinService {
-
-    /**
-     * All readings for [char], dictionary order preserved, de-duplicated by
-     * key. Empty for non-Chinese characters (punctuation, latin).
-     */
-    fun readingsOf(char: Char): List<PinyinReading> {
-        if (!isHan(char)) return emptyList()
-        return rawKeys(char)
-            .distinct()
-            // Non-Chinese input makes the dictionary echo the character back,
-            // which is not a reading.
-            .filter { it.isNotEmpty() && it.last() in '1'..'5' }
-            .map { key ->
-                splitInitialFinal(PinyinFormatter.format(key), key)
-            }
-    }
-
-    /**
-     * Raw dictionary keys, e.g. "重" -> ["zhong4", "chong2", "tong2"].
-     * These double as the audio asset names.
-     */
-    fun rawKeys(char: Char): List<String> =
-        PinyinHelper.toPinyinList(char, PinyinStyleEnum.NUM_LAST)
-
-
-    /**
-     * The dictionary key the dictionary itself would pick for [char] when it
-     * appears alone: its first reading.
-     */
-    fun defaultKey(char: Char): String? = rawKeys(char).firstOrNull()
-
-    /**
-     * Dictionary keys for [text] as a phrase, preferring the word reading
-     * where the dictionary knows one: "重复" -> chong2 fu4, not zhong4 fu4.
-     *
-     * The dictionary returns plain syllables separated by spaces, so a token
-     * is valid when it ends in a tone digit -- not when its first character is
-     * han, since a syllable like "chong2" is obviously not a han character.
-     */
-    fun phraseKeys(text: String): List<String> {
-        val phrase = PinyinHelper.toPinyin(text, PinyinStyleEnum.NUM_LAST)
-            .split(' ', ',', '\u3000')
-            .map { it.trim() }
-            .filter { it.length > 1 && it.last() in '1'..'5' && it[it.length - 2].isLetter() }
-        val perChar = text.filter { isHan(it) }.map { char ->
-            rawKeys(char).firstOrNull { it.last() in '1'..'5' } ?: return emptyList()
-        }
-        // The dictionary does not always align with per-character output;
-        // only trust it when the counts match.
-        return if (phrase.size == perChar.size) phrase else perChar
-    }
-
-    private fun splitInitialFinal(display: String, key: String): PinyinReading {
-        val initial = rawInitialOf(key)
-        val initialDisplay = if (initial.isEmpty()) "" else display.substring(0, initial.length)
-        val finalDisplay = display.substring(initialDisplay.length)
-        return PinyinReading(
-            key = key,
-            display = display,
-            initial = initialDisplay,
-            final = finalDisplay,
-        )
-    }
-
-    /**
-     * The initial as plain letters ("zh"), taken from the flat key so we
-     * never mis-split a tone-marked display string.
-     */
-    private fun rawInitialOf(key: String): String {
-        val body = key.dropLast(1)
-        return INITIALS_FOR_SPLIT.firstOrNull { body.startsWith(it) } ?: ""
-    }
-
-    private val INITIALS_FOR_SPLIT = listOf(
-        "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l",
-        "g", "k", "h", "j", "q", "x", "r", "z", "c", "s", "y", "w",
-    ).sortedByDescending { it.length }
 
     /** CJK ranges that the stroke data covers. */
     fun isHan(char: Char): Boolean {
@@ -202,5 +50,69 @@ object PinyinService {
             c in 0x3400..0x4DBF ||         // Extension A
             c in 0x2E80..0x2EFF ||         // Radicals Supplement
             c in 0xF900..0xFAFF            // Compatibility Ideographs
+    }
+
+    /**
+     * One [CharReading] per character of [text], in order. Punctuation and
+     * other non-hanzi produce no entry; the caller filters by [isHan].
+     */
+    fun readings(text: String): List<CharReading> {
+        val out = ArrayList<CharReading>(text.length)
+        for (term in HanLP.segment(text)) {
+            out += readingsForTerm(term)
+        }
+        return out
+    }
+
+    /**
+     * The chosen key per character, in order. This is what the audio and the
+     * sherpa lexicon are indexed by.
+     */
+    fun defaultKeys(text: String): List<String> = readings(text).map { it.selected.key }
+
+    /**
+     * Readings for one segmented word.
+     *
+     * The phrase reading decides the primary; each character also keeps its own
+     * dictionary readings as alternates, minus the one already chosen, so the
+     * picker does not offer a duplicate.
+     */
+    private fun readingsForTerm(term: Term): List<CharReading> {
+        val word = term.word
+        if (word.isEmpty()) return emptyList()
+
+        val phrase = if (isHan(word[0])) {
+            PinyinDictionary.convertToPinyin(word, true)
+        } else {
+            emptyList()
+        }
+
+        return word.mapIndexedNotNull { i, ch ->
+            if (!isHan(ch)) return@mapIndexedNotNull null
+            val chosen = phrase.getOrNull(i) ?: firstOf(ch) ?: return@mapIndexedNotNull null
+            val chosenReading = toReading(chosen)
+            val alternates = allOf(ch).filter { it.key != chosenReading.key }
+            CharReading(char = ch, selected = chosenReading, alternates = alternates)
+        }
+    }
+
+    private fun firstOf(char: Char): Pinyin? = PinyinDictionary.get(char.toString())?.firstOrNull()
+
+    private fun allOf(char: Char): List<PinyinReading> =
+        PinyinDictionary.get(char.toString())
+            ?.map { toReading(it) }
+            .orEmpty()
+
+    private fun toReading(p: Pinyin): PinyinReading {
+        val display = p.getPinyinWithToneMark()
+        val head = p.getHeadString()
+        return PinyinReading(
+            // "cháng" -> "chang2"; an unmarked syllable is treated as neutral,
+            // which matches the dictionary's own convention.
+            key = p.getPinyinWithoutTone() + (if (p.getTone() > 0) p.getTone().toString() else "5"),
+            display = display,
+            initial = if (head.isEmpty()) "" else display.substring(0, head.length),
+            final = if (head.isEmpty()) display else display.substring(head.length),
+        )
     }
 }

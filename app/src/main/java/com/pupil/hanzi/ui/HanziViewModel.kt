@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pupil.hanzi.audio.AudioPlayer
 import com.pupil.hanzi.data.AssetRepository
+import com.pupil.hanzi.data.CharReading
 import com.pupil.hanzi.data.PinyinReading
 import com.pupil.hanzi.data.PinyinService
 import com.pupil.hanzi.data.Settings
@@ -28,6 +29,7 @@ import kotlinx.coroutines.withContext
 /** One cell in the character grid. */
 data class CharCell(
     val char: Char,
+    /** Every reading, with the contextually correct one first. */
     val readings: List<PinyinReading>,
     /** Index into [readings]; a polyphone remembers the user's choice. */
     val selectedReading: Int = 0,
@@ -81,7 +83,7 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         // by the time the user types.
         viewModelScope.launch(Dispatchers.Default) {
             val t = SystemClock.elapsedRealtime()
-            PinyinService.rawKeys('好')
+            PinyinService.readings("好")
             Log.i(TAG, "pinyin warmup: ${SystemClock.elapsedRealtime() - t}ms")
         }
         viewModelScope.launch {
@@ -119,16 +121,28 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun build(text: String) {
         val t0 = SystemClock.elapsedRealtime()
-        val readingsByIndex: List<List<PinyinReading>> =
-            withContext(Dispatchers.Default) {
-                text.map { char -> PinyinService.readingsOf(char) }
-            }
+        // Segment the whole string, then convert word by word. Converting one
+        // character at a time loses the context, so 长江 would read zhǎng.
+        //
+        // The readings are consumed in order, never indexed by character: a
+        // sentence can hold the same character twice with different readings
+        // (行长 is xíng cháng, 长江 is cháng), and keying by character made
+        // every position share one list, so the first reading won everywhere.
+        val readings: List<CharReading> =
+            withContext(Dispatchers.Default) { PinyinService.readings(text) }
         val t1 = SystemClock.elapsedRealtime()
-        val cells = text.mapIndexed { i, char ->
+
+        var cursor = 0
+        val cells = text.map { char ->
             val punctuation = !PinyinService.isHan(char)
+            val reading = if (punctuation) null else readings.getOrNull(cursor++)
             CharCell(
                 char = char,
-                readings = readingsByIndex[i],
+                // The contextually chosen reading first, then the alternates,
+                // so index 0 is the one the phrase supports.
+                readings = reading?.let { r ->
+                    (listOf(r.selected) + r.alternates).distinctBy { it.key }
+                }.orEmpty(),
                 strokes = null,
                 isPunctuation = punctuation,
             )
