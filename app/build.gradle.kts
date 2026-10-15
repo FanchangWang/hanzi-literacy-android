@@ -44,8 +44,21 @@ android {
         release {
             optimization {
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+                // No packageScope. Naming packages here switches R8 into
+                // partial shrinking, and anything outside the named scope is
+                // then treated as an external dependency. The release build
+                // died on launch with
+                //   IllegalAccessError: Class kotlin.sequences.d extended by
+                //   class lg1 is inaccessible
+                // because kotlinx.coroutines could no longer reach the Kotlin
+                // stdlib. The default, "**", shrinks everything together and
+                // keeps the runtime consistent.
             }
+            // Custom keep rules. Even with full shrinking R8 drops
+            // kotlin.sequences.SequenceScope (marked R8$$REMOVED$$CLASS in
+            // mapping.txt) while Compose/coroutines still subclass it at
+            // runtime, crashing on launch. See proguard-rules.pro.
+            proguardFiles(file("proguard-rules.pro"))
         }
     }
     compileOptions {
