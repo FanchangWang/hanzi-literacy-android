@@ -3,3 +3,6 @@
 
 *.mp3 binary
 *.ttf binary
+*.onnx binary
+*.fst binary
+*.aar binary

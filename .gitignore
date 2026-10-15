@@ -31,3 +31,6 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# TTS probe scratch (models and venvs are fetched, not committed)
+.tts/
