@@ -59,6 +59,10 @@ data class HanziUiState(
     val settings: Settings = Settings.DEFAULT,
     val detail: DetailState? = null,
     val message: String? = null,
+    /** True while the first build is running, so the UI can say so. */
+    val loading: Boolean = false,
+    /** True once the stroke shards are cached, so a confirm need not wait. */
+    val warmed: Boolean = false,
     /** True while "play all" is running, so the button can offer to stop. */
     val playing: Boolean = false,
 ) {
@@ -81,10 +85,23 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         // characters on the device, which was the entire wait after tapping
         // confirm. Doing it here, in the background, means it is already hot
         // by the time the user types.
+        // Warm both expensive paths off the critical path.
+        //
+        // Measured on device: the first confirm spent 2128ms parsing stroke
+        // shards and 56ms on pinyin, while a second confirm took 31ms and
+        // 129ms. So the shard cache, not the dictionary, is what made the
+        // first tap slow -- it has to decompress the assets and build the
+        // index once. Doing that here means it is warm before the user types.
         viewModelScope.launch(Dispatchers.Default) {
             val t = SystemClock.elapsedRealtime()
             PinyinService.readings("好")
-            Log.i(TAG, "pinyin warmup: ${SystemClock.elapsedRealtime() - t}ms")
+            Log.i(TAG, "warmup: pinyin ${SystemClock.elapsedRealtime() - t}ms")
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val t = SystemClock.elapsedRealtime()
+            assets.warmStrokes()
+            Log.i(TAG, "warmup: shards ${SystemClock.elapsedRealtime() - t}ms")
+            _state.update { it.copy(warmed = true) }
         }
         viewModelScope.launch {
             settingsStore.settings.collect { s ->
@@ -108,8 +125,18 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(message = "请输入内容！") }
             return
         }
-        _state.update { it.copy(mode = Mode.VIEWING, lastConfirmed = text) }
-        viewModelScope.launch { build(text) }
+        // Publish immediately: the grid frame appears at once with empty
+        // character cells and the stroke data lands a moment later.
+        _state.update {
+            it.copy(mode = Mode.VIEWING, lastConfirmed = text, loading = true, cells = emptyList())
+        }
+        viewModelScope.launch {
+            try {
+                build(text)
+            } finally {
+                _state.update { it.copy(loading = false) }
+            }
+        }
     }
 
     /**

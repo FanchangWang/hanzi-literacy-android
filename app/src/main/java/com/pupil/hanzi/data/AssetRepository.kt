@@ -39,6 +39,27 @@ class AssetRepository(private val context: Context) {
     private val strokeShards = HashMap<String, Map<String, StrokeData>>()
     private val explanationShards = HashMap<String, Map<String, Map<String, String>>>()
 
+    /**
+     * Parse every stroke shard in the background.
+     *
+     * Measured on device: the first confirm spent 1054ms parsing shards even
+     * after a partial warm-up, because a sentence spreads across several
+     * buckets and warming a handful of characters only covers the two or three
+     * shards they land in. The whole set is 29.5MB and takes about four
+     * seconds; doing it off the main thread once means no later confirm ever
+     * pays the decompression cost.
+     */
+    suspend fun warmStrokes() {
+        val seen = HashSet<String>()
+        // A spread of characters is enough to enumerate every shard: the shard
+        // name depends only on the codepoint, so walking the code-point range
+        // hits all of them without hard-coding a list.
+        for (cp in 0x2E80..0x9FFF) {
+            val name = shardName(cp.toChar())
+            if (seen.add(name)) strokesOf(cp.toChar())
+        }
+    }
+
     /** Stroke data for [char], or null when the character has no strokes. */
     suspend fun strokesOf(char: Char): StrokeData? {
         if (!PinyinService.isHan(char)) return null

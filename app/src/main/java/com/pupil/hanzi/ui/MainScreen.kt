@@ -1,13 +1,19 @@
 package com.pupil.hanzi.ui
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -177,7 +184,13 @@ private fun EditingPane(
             placeholder = { Text("请输入汉字或标点符号...") },
         )
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Destructive action left, primary action right: the right edge is
+        // where the thumb rests and where the confirming action belongs.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             OutlinedButton(onClick = onClear) { Text("清空") }
             Button(onClick = onConfirm) { Text("确认") }
         }
@@ -198,12 +211,16 @@ private fun ViewingPane(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (state.isEmpty) {
-            Spacer(Modifier.height(24.dp))
-            Text(
-                text = "还没有内容，点下面的「编辑」开始",
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (state.loading) {
+                LoadingIndicator()
+            } else {
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    text = "还没有内容，点下面的「编辑」开始",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         } else {
             val config = LocalConfiguration.current
             // The original tool is a fixed 120px cell, which on a 2560x1600
@@ -238,6 +255,8 @@ private fun ViewingPane(
                 Spacer(Modifier.width(6.dp))
                 Text("编辑")
             }
+            // Before the first confirm there is nothing to play, and a
+            // disabled-looking empty action reads as broken.
             if (state.settings.speakCharacters && !state.isEmpty) {
                 // One button, two jobs: it starts the phrase and, while one is
                 // running, stops it. Pressing it again mid-phrase used to queue
@@ -285,4 +304,23 @@ private fun android.content.Context.keepScreenAwake() {
 private fun android.content.Context.allowScreenToSleep() {
     val window = (this as? android.app.Activity)?.window ?: return
     window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+}
+
+/** Centred spinner with a caption, shown while a sentence is being parsed. */
+@Composable
+private fun LoadingIndicator() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(strokeWidth = 3.dp)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "正在加载中…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
