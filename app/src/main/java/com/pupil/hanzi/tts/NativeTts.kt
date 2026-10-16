@@ -2,11 +2,11 @@ package com.pupil.hanzi.tts
 
 import android.content.Context
 import android.util.Log
-import com.hankcs.hanlp.HanLP
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.pupil.hanzi.nlp.Segmenters
 import java.io.File
 
 /**
@@ -94,7 +94,7 @@ class NativeTts private constructor(
         // indexOf would read a repeated word from the wrong position and shift
         // every character after it.
         var cursor = 0
-        for (term in HanLP.segment(text)) {
+        for (term in Segmenters.segment(text)) {
             val word = term.word
             if (!text.startsWith(word, cursor)) {
                 Log.w(TAG, "segment '$word' does not line up at $cursor")

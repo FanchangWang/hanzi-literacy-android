@@ -15,6 +15,7 @@ import com.pupil.hanzi.data.SettingsStore
 import com.pupil.hanzi.data.StrokeData
 import com.pupil.hanzi.data.VoiceAssets
 import com.pupil.hanzi.data.WordDefinition
+import com.pupil.hanzi.nlp.Segmenters
 import com.pupil.hanzi.tts.TtsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,8 +102,9 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         // index once. Doing that here means it is warm before the user types.
         viewModelScope.launch(Dispatchers.Default) {
             val t = SystemClock.elapsedRealtime()
+            Segmenters.ensure(getApplication())
             PinyinService.readings("好")
-            Log.i(TAG, "warmup: pinyin ${SystemClock.elapsedRealtime() - t}ms")
+            Log.i(TAG, "warmup: pinyin ${SystemClock.elapsedRealtime() - t}ms crf=${Segmenters.isCrf}")
         }
         viewModelScope.launch(Dispatchers.IO) {
             val t = SystemClock.elapsedRealtime()

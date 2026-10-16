@@ -1,9 +1,9 @@
 package com.pupil.hanzi.data
 
-import com.hankcs.hanlp.HanLP
 import com.hankcs.hanlp.dictionary.py.Pinyin
 import com.hankcs.hanlp.dictionary.py.PinyinDictionary
 import com.hankcs.hanlp.seg.common.Term
+import com.pupil.hanzi.nlp.Segmenters
 
 /** One reading of one character, e.g. "好" -> hǎo / hào. */
 data class PinyinReading(
@@ -55,7 +55,7 @@ object PinyinService {
      */
     fun readings(text: String): List<CharReading> {
         val out = ArrayList<CharReading>(text.length)
-        for (term in HanLP.segment(text)) {
+        for (term in Segmenters.segment(text)) {
             out += readingsForTerm(term)
         }
         // HanLP can drop or reshape a segment; pad or trim so the caller can
