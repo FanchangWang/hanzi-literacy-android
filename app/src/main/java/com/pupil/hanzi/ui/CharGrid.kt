@@ -182,18 +182,24 @@ private fun CharCard(
             onClick = onOpenDetail,
         )
 
-        // Keep the slot present when speech is off so rows stay aligned.
-        Box(
-            modifier = Modifier.size(36.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (speakEnabled && !cell.isPunctuation && reading != null) {
-                IconButton(onClick = onSpeak) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                        contentDescription = "朗读 ${cell.char}",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+        // The slot is held open for the cells that have nothing to speak --
+        // punctuation, or a reading that has not loaded yet -- so every card in
+        // a row is the same height and the rows keep a steady rhythm. With
+        // speech off nothing has one, so the whole strip goes and the grid gets
+        // that space back, the way the pinyin cell does.
+        if (speakEnabled) {
+            Box(
+                modifier = Modifier.size(36.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (!cell.isPunctuation && reading != null) {
+                    IconButton(onClick = onSpeak) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "朗读 ${cell.char}",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
             }
         }

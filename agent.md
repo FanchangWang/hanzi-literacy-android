@@ -114,7 +114,13 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 手机竖屏：输入框和「清空/粘贴/确认」固定在上方，只有历史记录 `LazyColumn` 吃 `weight(1f)`。平板或手机横屏（同一个 `WIDE_WIDTH_DP` 断点）：输入框在左、历史记录在右，左栏 `fillMaxHeight`，输入框用 `weight(1f, fill = false)` + `heightIn(min = 140.dp)`——文本多时输入框自己长高，最多长到按钮留下的空间，长文在框内滚动，**按钮永远不会被顶出屏幕**。改这里时别把输入框换成固定高度或让整个页面滚动。
 
-### 3.6 CRF 分词模型是 HanLP 的私有 `.bin` 格式
+### 3.6 喇叭那一格的高度只在语音开着时保留
+
+`CharCard` 里喇叭外面那个 36dp 的 `Box` 是**行内对齐**用的：同一行里可能有标点（`isPunctuation`）或还没查到读音的字（`reading == null`），它们没有喇叭；如果空格塌掉，一行里几张卡就不一样高，行高会参差不齐。
+
+但它**只在 `speakEnabled` 为真时才存在**——语音整个关掉时所有卡都没有喇叭，再留 36dp 就是白占地方（2026-10-16 之前就是这样，下一行不会上移）。拼音格反过来：`showPinyin` 是全局设置，关掉时所有卡一起少一格，所以直接塌掉。
+
+### 3.7 CRF 分词模型是 HanLP 的私有 `.bin` 格式
 
 `assets/hanlp_cws_crf.bin` 不是 CRF++ 的文本模型，是 HanLP 自己写的二进制格式（`LogLinearModel` 的 `load`）。加载它只能用 `com.hankcs.hanlp.model.crf.CRFLexicalAnalyzer(path)`：路径以 `.bin` 结尾时它直接按二进制读。
 
@@ -131,7 +137,7 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 | 现象 | 根因 | 教训 |
 |---|---|---|
 | 播完卡在「停止播放」 | `MODE_STATIC` 状态语义猜错 | 见 3.1 |
-| CRF 分词静默没生效，一直用 Viterbi | 用了已废弃的 `CRFSegment(String)`，它按 CRF++ 文本格式读 `.bin` 文件，异常被 `catch (Throwable)` 吞掉 | 见 3.6 |
+| CRF 分词静默没生效，一直用 Viterbi | 用了已废弃的 `CRFSegment(String)`，它按 CRF++ 文本格式读 `.bin` 文件，异常被 `catch (Throwable)` 吞掉 | 见 3.7 |
 
 **整句语音合成（sherpa-onnx）已于 2026-10 移除**，它带走的四个 bug——词典是构造期快照、词典 key 必须是单个词、onnxruntime 不可重入、模型输出浮点 PCM 需转 int16——也随之消失。需要这些结论时看 `backup/onnx-tts` 分支上的本文件。
 
