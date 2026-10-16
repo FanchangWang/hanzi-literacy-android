@@ -7,10 +7,8 @@ import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.pupil.hanzi.data.VoiceAssets
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,9 +34,6 @@ class AudioPlayer(
 
     private val cache = HashMap<String, DecodedAudio>()
     private val cacheLock = Mutex()
-
-    private var tts: TextToSpeech? = null
-    @Volatile private var ttsReady = false
 
     /** Decoded samples plus the rate they were decoded at. */
     private data class DecodedAudio(val samples: ShortArray, val sampleRate: Int)
@@ -231,34 +226,8 @@ class AudioPlayer(
         }
     }
 
-    /**
-     * Last-resort pronunciation via the platform engine, only reached when no
-     * mp3 matches. The platform may misjudge a polyphone, which is exactly
-     * what this project avoids everywhere else, so it is opt-in.
-     */
-    suspend fun playWithSystemTts(char: Char): Boolean {
-        val engine = ensureTts() ?: return false
-        return engine.speak(char.toString(), TextToSpeech.QUEUE_FLUSH, null, char.toString()) ==
-            TextToSpeech.SUCCESS
-    }
-
-    private suspend fun ensureTts(): TextToSpeech? {
-        tts?.let { return if (ttsReady) it else null }
-        val ready = CompletableDeferred<Boolean>()
-        val engine = TextToSpeech(appContext) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            ready.complete(ttsReady)
-        }
-        tts = engine
-        return if (ready.await()) engine else null
-    }
-
     fun release() {
         cache.clear()
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
-        ttsReady = false
     }
 
     private companion object {

@@ -1,9 +1,5 @@
 package com.pupil.hanzi.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -88,25 +84,3 @@ fun PinyinTextColored(
     )
 }
 
-/**
- * A polyphone's pinyin, tinted so the extra readings are discoverable.
- * Tapping opens the picker.
- */
-@Composable
-fun PolyphonePinyin(
-    reading: PinyinReading,
-    fontSize: TextUnit,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    PinyinTextColored(
-        display = reading.display,
-        initialLength = reading.initial.length,
-        fontSize = fontSize,
-        fontWeight = FontWeight.Bold,
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
-}

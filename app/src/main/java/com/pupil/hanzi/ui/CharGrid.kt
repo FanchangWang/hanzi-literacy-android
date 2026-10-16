@@ -272,12 +272,6 @@ private fun PinyinCell(
     }
 }
 
-/** The punctuation mark echoed in the pinyin cell. */
-@Composable
-private fun PunctuationPunctuationPlaceholder(char: Char) {
-    PunctuationPinyin(char)
-}
-
 @Composable
 private fun PunctuationPinyin(char: Char) {
     Text(

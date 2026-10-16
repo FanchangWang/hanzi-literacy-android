@@ -80,8 +80,7 @@ object PinyinService {
         return rebuilt
     }
 
-    /** The chosen key per character, in order. */
-    fun defaultKeys(text: String): List<String> = readings(text).map { it.selected.key }
+
 
     /**
      * Readings for one segmented word, one entry per han character.

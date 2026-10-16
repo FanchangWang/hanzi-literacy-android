@@ -170,6 +170,5 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 ## 7. 已知问题
 
-- `AudioPlayer.playWithSystemTts` / `ensureTts` 是平台 TTS 兜底，**当前没有任何调用点**，只保留了实现。
 - `app/src/main/ic_launcher-playstore.png` 放在 `res/` 目录下，不参与编译，是 Android Studio 导出图标时的落点。保留即可。
 - Gradle 有一条 `Configuration.setVisible()` 弃用警告，来自 **AGP 内部**，不是本项目代码。Gradle 10 才移除，届时升级 AGP 即可。
