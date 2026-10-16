@@ -17,7 +17,7 @@ data class Settings(
     val showPinyin: Boolean = true,
     val animateStrokes: Boolean = true,
     val speakCharacters: Boolean = true,
-    val keepScreenOn: Boolean = false,
+    val keepScreenOn: Boolean = true,
 ) {
     companion object {
         val DEFAULT = Settings()
@@ -41,7 +41,7 @@ class SettingsStore(private val context: Context) {
                 showPinyin = prefs[KEY_SHOW_PINYIN] ?: true,
                 animateStrokes = prefs[KEY_ANIMATE] ?: true,
                 speakCharacters = prefs[KEY_SPEAK] ?: true,
-                keepScreenOn = prefs[KEY_KEEP_ON] ?: false,
+                keepScreenOn = prefs[KEY_KEEP_ON] ?: true,
             )
         }
 

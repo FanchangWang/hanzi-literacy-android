@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -34,6 +36,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,6 +72,7 @@ fun MainScreen(viewModel: HanziViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
 
     // Holding the screen awake is a window flag, so it follows the setting
     // rather than being pushed on and popped by hand.
@@ -98,6 +102,8 @@ fun MainScreen(viewModel: HanziViewModel) {
         ) {
             SettingsBar(
                 settings = state.settings,
+                mode = state.mode,
+                wide = wide,
                 onShowPinyin = viewModel::setShowPinyin,
                 onAnimate = viewModel::setAnimate,
                 onSpeak = viewModel::setSpeak,
@@ -118,10 +124,15 @@ fun MainScreen(viewModel: HanziViewModel) {
 
                 Mode.EDITING -> EditingPane(
                     draft = state.draft,
+                    history = state.history,
+                    wide = wide,
                     onDraftChange = viewModel::onDraftChange,
                     onClear = viewModel::clearDraft,
                     onPaste = viewModel::pasteFromClipboard,
                     onConfirm = viewModel::confirm,
+                    onStudyHistory = viewModel::studyHistory,
+                    onEditHistory = viewModel::editHistory,
+                    onDeleteHistory = viewModel::deleteHistory,
                 )
             }
         }
@@ -136,21 +147,26 @@ fun MainScreen(viewModel: HanziViewModel) {
  * it is tapped. A tablet, where they do fit, keeps the single row: chips next to
  * the title, edit button in the top-right corner.
  *
+ * They start unfolded on the input page -- that is where they are set -- and
+ * folded on the grid page, which wants the height. Tapping the toggle overrides
+ * that for as long as the page stays put.
+ *
  * The edit button stays outside the collapsing part, so it never moves.
  */
 @Composable
 private fun SettingsBar(
     settings: Settings,
+    mode: Mode,
+    wide: Boolean,
     onShowPinyin: (Boolean) -> Unit,
     onAnimate: (Boolean) -> Unit,
     onSpeak: (Boolean) -> Unit,
     onKeepScreenOn: (Boolean) -> Unit,
     onEdit: (() -> Unit)?,
 ) {
-    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
-    // Survives rotation, which is also when the layout switches between the
-    // collapsed and the inline form.
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    // Keyed on the mode: switching pages resets the toggle to that page's
+    // default, and a rotation within a page keeps whatever was chosen.
+    var expanded by rememberSaveable(mode) { mutableStateOf(mode == Mode.EDITING) }
 
     val chips: @Composable () -> Unit = {
         FilterChip(
@@ -166,7 +182,7 @@ private fun SettingsBar(
         FilterChip(
             selected = settings.speakCharacters,
             onClick = { onSpeak(!settings.speakCharacters) },
-            label = { Text("语音") },
+            label = { Text("语音朗读") },
         )
         FilterChip(
             selected = settings.keepScreenOn,
@@ -203,7 +219,7 @@ private fun SettingsBar(
                 FilterChip(
                     selected = expanded,
                     onClick = { expanded = !expanded },
-                    label = { Text(if (expanded) "收起" else "更多") },
+                    label = { Text(if (expanded) "收起设置" else "显示设置") },
                     leadingIcon = {
                         Icon(
                             imageVector = if (expanded) {
@@ -240,14 +256,74 @@ private fun SettingsBar(
     }
 }
 
+/**
+ * The input page: the field, its buttons and the stored texts.
+ *
+ * A phone stacks them, with only the history scrolling. A wider window -- a
+ * tablet, or a phone on its side -- puts the history beside the field instead,
+ * which is the same split without the vertical squeeze.
+ */
 @Composable
 private fun EditingPane(
     draft: String,
+    history: List<String>,
+    wide: Boolean,
     onDraftChange: (String) -> Unit,
     onClear: () -> Unit,
     onPaste: () -> Unit,
     onConfirm: () -> Unit,
+    onStudyHistory: (String) -> Unit,
+    onEditHistory: (String) -> Unit,
+    onDeleteHistory: (String) -> Unit,
 ) {
+    if (wide) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(16.dp),
+            ) {
+                Text("文字输入", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                // Weighted but not filled: the field takes the height its text
+                // needs, up to what the buttons leave on the screen. A long
+                // text scrolls inside the field instead of pushing them off.
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 140.dp)
+                        .weight(1f, fill = false),
+                    placeholder = { Text("请输入汉字或标点符号...") },
+                )
+                Spacer(Modifier.height(12.dp))
+                DraftActions(onClear = onClear, onPaste = onPaste, onConfirm = onConfirm)
+            }
+
+            VerticalDivider()
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(16.dp),
+            ) {
+                Text("历史记录", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                HistoryList(
+                    history = history,
+                    onStudy = onStudyHistory,
+                    onEdit = onEditHistory,
+                    onDelete = onDeleteHistory,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -264,18 +340,46 @@ private fun EditingPane(
             placeholder = { Text("请输入汉字或标点符号...") },
         )
         Spacer(Modifier.height(12.dp))
-        // Destructive action left, primary actions right: the right edge is
-        // where the thumb rests and where the confirming action belongs.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onClear) { Text("清空") }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = onPaste) { Text("粘贴") }
-                Button(onClick = onConfirm) { Text("确认") }
-            }
+        DraftActions(onClear = onClear, onPaste = onPaste, onConfirm = onConfirm)
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider()
+        Text(
+            text = "历史记录",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+        )
+        // The only scrolling part of this page: the field and its buttons above
+        // keep their place while the history moves under them.
+        HistoryList(
+            history = history,
+            onStudy = onStudyHistory,
+            onEdit = onEditHistory,
+            onDelete = onDeleteHistory,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * 清空 on the left, the actions that keep the text on the right: the right edge
+ * is where the thumb rests and where the confirming action belongs.
+ */
+@Composable
+private fun DraftActions(
+    onClear: () -> Unit,
+    onPaste: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(onClick = onClear) { Text("清空") }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = onPaste) { Text("粘贴") }
+            Button(onClick = onConfirm) { Text("确认") }
         }
     }
 }

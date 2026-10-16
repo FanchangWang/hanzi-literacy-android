@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.pupil.hanzi.audio.AudioPlayer
 import com.pupil.hanzi.data.AssetRepository
 import com.pupil.hanzi.data.CharReading
+import com.pupil.hanzi.data.HistoryStore
 import com.pupil.hanzi.data.PinyinReading
 import com.pupil.hanzi.data.PinyinService
 import com.pupil.hanzi.data.Settings
@@ -60,6 +61,8 @@ data class HanziUiState(
     val settings: Settings = Settings.DEFAULT,
     val detail: DetailState? = null,
     val message: String? = null,
+    /** Confirmed texts, newest first. */
+    val history: List<String> = emptyList(),
     /** True while the first build is running, so the UI can say so. */
     val loading: Boolean = false,
     /** True once the stroke shards are cached, so a confirm need not wait. */
@@ -72,6 +75,7 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
 
     private val assets = AssetRepository(app)
     private val settingsStore = SettingsStore(app)
+    private val historyStore = HistoryStore(app)
     private val voiceAssets = VoiceAssets(app)
     private val audio = AudioPlayer(app, voiceAssets)
 
@@ -108,6 +112,11 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(settings = s) }
             }
         }
+        viewModelScope.launch {
+            historyStore.history.collect { entries ->
+                _state.update { it.copy(history = entries) }
+            }
+        }
     }
 
     fun onDraftChange(text: String) = _state.update { it.copy(draft = text) }
@@ -142,6 +151,24 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearDraft() = _state.update { it.copy(draft = "") }
 
+    /**
+     * Build the grid for a stored text, as if it had just been typed.
+     *
+     * The draft is replaced too, so returning to the input page shows the text
+     * that was studied rather than whatever was left in the field.
+     */
+    fun studyHistory(text: String) {
+        _state.update { it.copy(draft = text) }
+        confirm()
+    }
+
+    /** Put a stored text back in the field, where it can be changed. */
+    fun editHistory(text: String) = _state.update { it.copy(mode = Mode.EDITING, draft = text) }
+
+    fun deleteHistory(text: String) = viewModelScope.launch {
+        historyStore.remove(text)
+    }
+
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
     /** Confirm the draft and build the grid. */
@@ -156,6 +183,8 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(mode = Mode.VIEWING, loading = true, cells = emptyList())
         }
+        // Separate from the build: a disk write must not hold up the grid.
+        viewModelScope.launch { historyStore.record(text) }
         viewModelScope.launch {
             try {
                 build(text)

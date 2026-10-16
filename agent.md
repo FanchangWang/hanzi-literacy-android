@@ -29,7 +29,7 @@
 | 语言 / UI | Kotlin 2.4.21 + Jetpack Compose（Material 3） |
 | 构建 | AGP 9.4.1 / Gradle 9.8 / JDK 17 / compileSdk 37 / minSdk 31 |
 | 模块 | 单模块 `:app` |
-| 测试 | 41 个单元测试，`:app:testDebugUnitTest` |
+| 测试 | 47 个单元测试，`:app:testDebugUnitTest` |
 | 网络权限 | **无。** 所有数据随包分发 |
 
 ### 关键依赖
@@ -53,7 +53,8 @@ app/src/main/
 │   │   ├── AssetRepository.kt   分片资源的懒加载与预热
 │   │   ├── PinyinService.kt     汉字判定、带调拼音拼装
 │   │   ├── StrokeData.kt        笔顺数据结构
-│   │   ├── SettingsStore.kt     DataStore 持久化四个开关
+│   │   ├── SettingsStore.kt     DataStore 持久化四个开关（默认全开）
+│   │   ├── HistoryStore.kt      DataStore 持久化确认过的文字（JSON 数组，最多 50 条）
 │   │   └── VoiceAssets.kt       音节 mp3 的存在性探测
 │   ├── nlp/Segmenters.kt        CRF 分词模型的加载与回退
 │   ├── audio/AudioPlayer.kt     音节 mp3 解码播放
@@ -61,7 +62,7 @@ app/src/main/
 │   │   ├── StrokeGeometry.kt    medians/outlines → Compose Path
 │   │   ├── StrokeTimeline.kt    笔顺时序
 │   │   └── StrokeTiming.kt      时长分配
-│   └── ui/                      MainScreen / CharGrid / DetailSheet /
+│   └── ui/                      MainScreen / CharGrid / HistoryList / DetailSheet /
 │                                HanziViewModel / PinyinText / ReadingPicker
 ├── assets/
 │   ├── draw_all/         53 个分片，30MB  笔顺 medians + outlines
@@ -99,7 +100,9 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 ### 3.2 设置栏在窄窗口折叠
 
-`SettingsBar` 在 `screenWidthDp < 600`（Material 的 compact 断点，常量 `WIDE_WIDTH_DP`）时把四个开关收进「更多」芯片，点开才铺到第二行；宽窗口保持单行平铺。用断点而不是测量芯片宽度，是因为断点不需要第二次布局就能定下来。
+`SettingsBar` 在 `screenWidthDp < 600`（Material 的 compact 断点，常量 `WIDE_WIDTH_DP`）时把四个开关收进一个芯片，点开才铺到第二行；宽窗口保持单行平铺。用断点而不是测量芯片宽度，是因为断点不需要第二次布局就能定下来。
+
+折叠状态用 `rememberSaveable(mode)` 记忆：**输入页默认展开、字卡页默认收起**，切页时回到该页的默认值，同一页内旋转保持用户的选择。芯片文案是「显示设置」/「收起设置」——「更多」看不出这里是什么。
 
 **不要改回横向滚动。** 滚动把开关藏在一个没有任何提示的位置，之前手机上「屏幕常亮」就是被「编辑」按钮盖住、又被滚走的那一个。
 
@@ -107,7 +110,11 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 `cells` 和输入文本**一一对应**（换行符也是一个 cell，`isPunctuation = true`），行结构只由 `CharGrid.kt` 的 `gridRows(cells, columns)` 决定：换行结束当前行，连续换行算一次换行，首尾换行不产生空行。渲染用 `LazyColumn` + `Row`，不是 `LazyVerticalGrid`——固定列数的网格只会把 cell 塞进下一个空位，没法提前结束一行。
 
-### 3.4 CRF 分词模型是 HanLP 的私有 `.bin` 格式
+### 3.5 输入页只有历史记录滚动
+
+手机竖屏：输入框和「清空/粘贴/确认」固定在上方，只有历史记录 `LazyColumn` 吃 `weight(1f)`。平板或手机横屏（同一个 `WIDE_WIDTH_DP` 断点）：输入框在左、历史记录在右，左栏 `fillMaxHeight`，输入框用 `weight(1f, fill = false)` + `heightIn(min = 140.dp)`——文本多时输入框自己长高，最多长到按钮留下的空间，长文在框内滚动，**按钮永远不会被顶出屏幕**。改这里时别把输入框换成固定高度或让整个页面滚动。
+
+### 3.6 CRF 分词模型是 HanLP 的私有 `.bin` 格式
 
 `assets/hanlp_cws_crf.bin` 不是 CRF++ 的文本模型，是 HanLP 自己写的二进制格式（`LogLinearModel` 的 `load`）。加载它只能用 `com.hankcs.hanlp.model.crf.CRFLexicalAnalyzer(path)`：路径以 `.bin` 结尾时它直接按二进制读。
 
@@ -124,7 +131,7 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 | 现象 | 根因 | 教训 |
 |---|---|---|
 | 播完卡在「停止播放」 | `MODE_STATIC` 状态语义猜错 | 见 3.1 |
-| CRF 分词静默没生效，一直用 Viterbi | 用了已废弃的 `CRFSegment(String)`，它按 CRF++ 文本格式读 `.bin` 文件，异常被 `catch (Throwable)` 吞掉 | 见 3.4 |
+| CRF 分词静默没生效，一直用 Viterbi | 用了已废弃的 `CRFSegment(String)`，它按 CRF++ 文本格式读 `.bin` 文件，异常被 `catch (Throwable)` 吞掉 | 见 3.6 |
 
 **整句语音合成（sherpa-onnx）已于 2026-10 移除**，它带走的四个 bug——词典是构造期快照、词典 key 必须是单个词、onnxruntime 不可重入、模型输出浮点 PCM 需转 int16——也随之消失。需要这些结论时看 `backup/onnx-tts` 分支上的本文件。
 
@@ -145,7 +152,7 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 ```bash
 ./gradlew :app:assembleDebug          # 构建 APK
-./gradlew :app:testDebugUnitTest      # 41 个单元测试
+./gradlew :app:testDebugUnitTest      # 47 个单元测试
 ./gradlew :app:assembleRelease        # 发布包，输出到 app/build/outputs/apk/release/
 ```
 
