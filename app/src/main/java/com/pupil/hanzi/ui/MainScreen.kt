@@ -1,6 +1,5 @@
 package com.pupil.hanzi.ui
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,14 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -33,10 +33,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -45,6 +49,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pupil.hanzi.data.Settings
+
+/**
+ * Width at which the switches stop being a phone's problem.
+ *
+ * Below this the title, four chips and the edit button cannot share one line,
+ * so the chips collapse behind a toggle. This is Material's compact/medium
+ * breakpoint, and it is used instead of measuring the chips because the
+ * decision then needs no second layout pass.
+ */
+private const val WIDE_WIDTH_DP = 600
 
 /**
  * Single screen with two mutually exclusive states: the character grid and the
@@ -88,6 +102,7 @@ fun MainScreen(viewModel: HanziViewModel) {
                 onAnimate = viewModel::setAnimate,
                 onSpeak = viewModel::setSpeak,
                 onKeepScreenOn = viewModel::setKeepScreenOn,
+                onEdit = if (state.mode == Mode.VIEWING) viewModel::startEditing else null,
             )
             HorizontalDivider()
 
@@ -96,9 +111,6 @@ fun MainScreen(viewModel: HanziViewModel) {
                     state = state,
                     onSpeak = viewModel::speak,
                     onPreviewReading = viewModel::speakReading,
-                    onSpeakAll = viewModel::speakAll,
-                    onStopPlaying = viewModel::stopPlaying,
-                    onEdit = viewModel::startEditing,
                     onOpenDetail = viewModel::openDetail,
                     onSelectReading = viewModel::selectReading,
                     onCloseDetail = viewModel::closeDetail,
@@ -108,6 +120,7 @@ fun MainScreen(viewModel: HanziViewModel) {
                     draft = state.draft,
                     onDraftChange = viewModel::onDraftChange,
                     onClear = viewModel::clearDraft,
+                    onPaste = viewModel::pasteFromClipboard,
                     onConfirm = viewModel::confirm,
                 )
             }
@@ -115,7 +128,16 @@ fun MainScreen(viewModel: HanziViewModel) {
     }
 }
 
-/** The switches. Always visible. */
+/**
+ * The switches.
+ *
+ * A phone cannot hold the title, four chips and the edit button on one line, so
+ * there the chips collapse behind one toggle and unfold onto a second line when
+ * it is tapped. A tablet, where they do fit, keeps the single row: chips next to
+ * the title, edit button in the top-right corner.
+ *
+ * The edit button stays outside the collapsing part, so it never moves.
+ */
 @Composable
 private fun SettingsBar(
     settings: Settings,
@@ -123,21 +145,14 @@ private fun SettingsBar(
     onAnimate: (Boolean) -> Unit,
     onSpeak: (Boolean) -> Unit,
     onKeepScreenOn: (Boolean) -> Unit,
+    onEdit: (() -> Unit)?,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "汉字识字",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(end = 8.dp),
-        )
+    val wide = LocalConfiguration.current.screenWidthDp >= WIDE_WIDTH_DP
+    // Survives rotation, which is also when the layout switches between the
+    // collapsed and the inline form.
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    val chips: @Composable () -> Unit = {
         FilterChip(
             selected = settings.showPinyin,
             onClick = { onShowPinyin(!settings.showPinyin) },
@@ -159,6 +174,70 @@ private fun SettingsBar(
             label = { Text("屏幕常亮") },
         )
     }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "汉字识字",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+            if (wide) {
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    chips()
+                }
+            } else {
+                FilterChip(
+                    selected = expanded,
+                    onClick = { expanded = !expanded },
+                    label = { Text(if (expanded) "收起" else "更多") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (expanded) {
+                                Icons.Filled.ExpandLess
+                            } else {
+                                Icons.Filled.ExpandMore
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(FilterChipDefaults.IconSize),
+                        )
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+            }
+            if (onEdit != null) {
+                TextButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("编辑")
+                }
+            }
+        }
+        if (!wide && expanded) {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                chips()
+            }
+        }
+    }
 }
 
 @Composable
@@ -166,6 +245,7 @@ private fun EditingPane(
     draft: String,
     onDraftChange: (String) -> Unit,
     onClear: () -> Unit,
+    onPaste: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     Column(
@@ -184,7 +264,7 @@ private fun EditingPane(
             placeholder = { Text("请输入汉字或标点符号...") },
         )
         Spacer(Modifier.height(12.dp))
-        // Destructive action left, primary action right: the right edge is
+        // Destructive action left, primary actions right: the right edge is
         // where the thumb rests and where the confirming action belongs.
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -192,7 +272,10 @@ private fun EditingPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedButton(onClick = onClear) { Text("清空") }
-            Button(onClick = onConfirm) { Text("确认") }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onPaste) { Text("粘贴") }
+                Button(onClick = onConfirm) { Text("确认") }
+            }
         }
     }
 }
@@ -202,10 +285,7 @@ private fun ViewingPane(
     state: HanziUiState,
     onSpeak: (Int) -> Unit,
     onPreviewReading: (Int, Int) -> Unit,
-    onSpeakAll: () -> Unit,
-    onStopPlaying: () -> Unit,
     onCloseDetail: () -> Unit,
-    onEdit: () -> Unit,
     onOpenDetail: (Int) -> Unit,
     onSelectReading: (Int, Int) -> Unit,
 ) {
@@ -216,7 +296,7 @@ private fun ViewingPane(
             } else {
                 Spacer(Modifier.height(24.dp))
                 Text(
-                    text = "还没有内容，点下面的「编辑」开始",
+                    text = "还没有内容，点右上角的「编辑」开始",
                     modifier = Modifier.padding(horizontal = 16.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -241,40 +321,6 @@ private fun ViewingPane(
                 columns = columns,
                 modifier = Modifier.weight(1f),
             )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onEdit) {
-                Icon(Icons.Filled.Edit, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("编辑")
-            }
-            // Before the first confirm there is nothing to play, and a
-            // disabled-looking empty action reads as broken.
-            if (state.settings.speakCharacters && !state.isEmpty) {
-                // One button, two jobs: it starts the phrase and, while one is
-                // running, stops it. Pressing it again mid-phrase used to queue
-                // a second playback on top of the first.
-                if (state.playing) {
-                    Button(onClick = onStopPlaying) {
-                        Icon(Icons.Filled.Stop, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("停止播放")
-                    }
-                } else {
-                    Button(onClick = onSpeakAll) {
-                        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("播放全部文本")
-                    }
-                }
-            }
         }
     }
 

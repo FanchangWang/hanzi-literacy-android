@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,9 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -46,6 +46,36 @@ import com.pupil.hanzi.stroke.StrokeGeometry
 import java.util.IdentityHashMap
 import kotlin.math.max
 
+/**
+ * Cell indices grouped into grid rows.
+ *
+ * A newline ends the row it sits on, so the grid mirrors the lines of the input
+ * instead of packing every character into one continuous flow. A run of
+ * newlines is one break -- two blank lines in the text field are still one row
+ * change on screen -- and newlines at the very start or end add nothing. A line
+ * longer than [columns] wraps like it always did.
+ */
+internal fun gridRows(cells: List<CharCell>, columns: Int): List<List<Int>> {
+    val rows = ArrayList<List<Int>>()
+    var row = ArrayList<Int>(columns)
+    for ((index, cell) in cells.withIndex()) {
+        if (cell.char == '\n' || cell.char == '\r') {
+            if (row.isNotEmpty()) {
+                rows += row
+                row = ArrayList(columns)
+            }
+            continue
+        }
+        row += index
+        if (row.size == columns) {
+            rows += row
+            row = ArrayList(columns)
+        }
+    }
+    if (row.isNotEmpty()) rows += row
+    return rows
+}
+
 /** Characters laid out in a wrapping grid, one card each. */
 @Composable
 fun CharGrid(
@@ -64,26 +94,41 @@ fun CharGrid(
     // entry is correct rather than a collision.
     val pathCache = remember { IdentityHashMap<StrokeData, List<android.graphics.Path>>() }
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(columns),
+    // Rows rather than a fixed-column grid: a grid packs every cell into the
+    // next free slot and has no way to end a row early, which is what a newline
+    // in the input has to do.
+    val rows = remember(cells, columns) { gridRows(cells, columns) }
+
+    LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        itemsIndexed(cells) { index, cell ->
-            CharCard(
-                cell = cell,
-                showPinyin = showPinyin,
-                animate = animate,
-                speakEnabled = speakEnabled,
-                paths = cell.strokes?.let { data ->
-                    pathCache.getOrPut(data) { StrokeGeometry.parsePaths(data) }
-                }.orEmpty(),
-                onSpeak = { onSpeak(index) },
-                onOpenDetail = { onOpenDetail(index) },
-                onSelectReading = { readingIndex -> onSelectReading(index, readingIndex) },
-            )
+        items(rows) { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                for (index in row) {
+                    val cell = cells[index]
+                    CharCard(
+                        cell = cell,
+                        showPinyin = showPinyin,
+                        animate = animate,
+                        speakEnabled = speakEnabled,
+                        paths = cell.strokes?.let { data ->
+                            pathCache.getOrPut(data) { StrokeGeometry.parsePaths(data) }
+                        }.orEmpty(),
+                        onSpeak = { onSpeak(index) },
+                        onOpenDetail = { onOpenDetail(index) },
+                        onSelectReading = { readingIndex -> onSelectReading(index, readingIndex) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // Fill the rest of a short row so its cells keep the width of
+                // a full row's.
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
         }
     }
 }
@@ -106,12 +151,13 @@ private fun CharCard(
     onSpeak: () -> Unit,
     onOpenDetail: () -> Unit,
     onSelectReading: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var pickerOpen by remember { mutableStateOf(false) }
     val reading = cell.reading
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (showPinyin) {
