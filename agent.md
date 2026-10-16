@@ -29,7 +29,7 @@
 | 语言 / UI | Kotlin 2.4.21 + Jetpack Compose（Material 3） |
 | 构建 | AGP 9.4.1 / Gradle 9.8 / JDK 17 / compileSdk 37 / minSdk 31 |
 | 模块 | 单模块 `:app` |
-| 测试 | 48 个单元测试，`:app:testDebugUnitTest` |
+| 测试 | 54 个单元测试，`:app:testDebugUnitTest` |
 | 网络权限 | **无。** 所有数据随包分发 |
 
 ### 关键依赖
@@ -152,7 +152,7 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 ```bash
 ./gradlew :app:assembleDebug          # 构建 APK
-./gradlew :app:testDebugUnitTest      # 48 个单元测试
+./gradlew :app:testDebugUnitTest      # 54 个单元测试
 ./gradlew :app:assembleRelease        # 发布包，输出到 app/build/outputs/apk/release/
 ```
 

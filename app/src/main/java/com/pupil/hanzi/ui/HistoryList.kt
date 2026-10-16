@@ -47,11 +47,15 @@ fun HistoryList(
     }
 
     LazyColumn(modifier = modifier) {
+        // Read once per composition: a row only needs to know which day it was
+        // stored on, not the exact instant it is drawn.
+        val now = System.currentTimeMillis()
         // The text is the entry's identity: recording the same text twice
         // moves it instead of adding a second copy, so keys stay unique.
         items(history, key = { it.text }) { entry ->
             HistoryRow(
                 entry = entry,
+                now = now,
                 onStudy = { onStudy(entry.text) },
                 onEdit = { onEdit(entry.text) },
                 onDelete = { onDelete(entry.text) },
@@ -71,6 +75,7 @@ fun HistoryList(
 @Composable
 private fun HistoryRow(
     entry: HistoryEntry,
+    now: Long,
     onStudy: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -79,7 +84,7 @@ private fun HistoryRow(
         // An entry stored before times were kept has none to show.
         if (entry.timeMillis > 0L) {
             Text(
-                text = formatHistoryTime(entry.timeMillis),
+                text = formatHistoryTime(entry.timeMillis, now),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -113,8 +118,31 @@ private fun HistoryRow(
     }
 }
 
-private val HISTORY_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+private val HISTORY_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val HISTORY_DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+private val WEEKDAYS = listOf("一", "二", "三", "四", "五", "六", "日")
 
-/** The wall-clock time of a stored entry, in the device's zone. */
-private fun formatHistoryTime(millis: Long): String =
-    Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(HISTORY_TIME_FORMAT)
+/**
+ * When a stored entry was confirmed, in the device's zone and idiom.
+ *
+ * A weekday is the part that ages well: it says at a glance how long ago this
+ * was. Today and yesterday are named because their date is the one thing the
+ * reader already knows; anything older gets its full date, since "上周三" only
+ * gets more ambiguous the further back it goes. Reads as 周五 今天 10:04:40.
+ */
+internal fun formatHistoryTime(
+    millis: Long,
+    now: Long,
+    zone: ZoneId = ZoneId.systemDefault(),
+): String {
+    val at = Instant.ofEpochMilli(millis).atZone(zone)
+    val date = at.toLocalDate()
+    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    val day = when (date) {
+        today -> "今天"
+        today.minusDays(1) -> "昨天"
+        else -> date.format(HISTORY_DATE_FORMAT)
+    }
+    // DayOfWeek.value is 1 for Monday through 7 for Sunday.
+    return "周${WEEKDAYS[date.dayOfWeek.value - 1]} $day ${at.format(HISTORY_TIME_FORMAT)}"
+}
