@@ -4,25 +4,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// Regenerates app/src/main/assets/{draw_all,explanation_all,voice} from the
-// cnchar-data checkout. The merged files are committed, so a clean clone
-// builds without running this; it only refreshes them when the source moves.
-val cncharDataDir: String =
-    (findProperty("cncharDataDir") as String?)
-        ?: "C:\\Users\\guyue\\code\\pupil-learning-tool\\cnchar-data\\cnchar-data"
-
-val mergeAssets = tasks.register<Exec>("mergeAssets") {
-    group = "build setup"
-    description = "Merge cnchar-data per-char JSON into sharded assets."
-
-    val outDir = layout.projectDirectory.dir("src/main/assets").asFile
-    inputs.dir(File(cncharDataDir)).withPathSensitivity(PathSensitivity.RELATIVE)
-    outputs.dir(outDir)
-
-    commandLine(
-        "uv", "run", "$rootDir/tools/merge_assets.py", cncharDataDir, outDir.absolutePath
-    )
-}
+// The merged cnchar assets (draw_all, explanation_all, voice) are committed
+// to git. To regenerate them after the source moves, run
+//   uv run tools/merge_assets.py <cnchar-data-dir> app/src/main/assets
+// manually; the build does not need this step.
 
 android {
     namespace = "com.pupil.hanzi"
@@ -40,8 +25,39 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Both variants sign with jks/key, committed on purpose; credentials are in
+    // jks/readme.txt. One key for everything means a debug build installs over
+    // a release install (and the other way round) instead of failing with
+    // INSTALL_FAILED_UPDATE_INCOMPATIBLE, which is what the default per-machine
+    // ~/.android/debug.keystore caused. The config is named "shared" rather
+    // than "debug" because release uses it too, so AGP's implicit debug signing
+    // config is left unused.
+    //
+    // storeType is stated even though the build also succeeds without it:
+    // jks/key is PKCS12 (keytool reports PKCS12, the file starts 30 82), while
+    // jks/readme.txt calls it "(jks)" and the name carries no extension, so
+    // leaving the type implicit makes the load depend on the JVM default.
+    //
+    // Consequence of signing release with a committed key: anyone with a
+    // checkout can sign an update, and losing jks/key means no future build can
+    // be installed over an existing one. Fine for sideloading; Play App Signing
+    // is the answer if this ever ships there.
+    signingConfigs {
+        create("shared") {
+            storeFile = rootProject.file("jks/key")
+            storeType = "PKCS12"
+            storePassword = "hanzi123"
+            keyAlias = "hanzi"
+            keyPassword = "hanzi123"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
+            signingConfig = signingConfigs.getByName("shared")
             optimization {
                 enable = true
                 // No packageScope. Naming packages here switches R8 into
@@ -69,8 +85,6 @@ android {
         compose = true
     }
 }
-
-tasks.named("preBuild") { dependsOn(mergeAssets) }
 
 dependencies {
     // The prebuilt engine: it ships native .so per ABI and is not on Maven.

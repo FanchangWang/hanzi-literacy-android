@@ -38,3 +38,4 @@ google-services.json
 
 # Release output (APK, R8 mapping, metadata) is a build product
 app/release/
+app/debug/
