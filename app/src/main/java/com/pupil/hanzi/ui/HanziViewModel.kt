@@ -1,6 +1,7 @@
 package com.pupil.hanzi.ui
 
 import android.app.Application
+import android.content.ClipboardManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -16,9 +17,7 @@ import com.pupil.hanzi.data.StrokeData
 import com.pupil.hanzi.data.VoiceAssets
 import com.pupil.hanzi.data.WordDefinition
 import com.pupil.hanzi.nlp.Segmenters
-import com.pupil.hanzi.tts.TtsRepository
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -27,7 +26,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 /** One cell in the character grid. */
@@ -58,7 +56,6 @@ enum class Mode { VIEWING, EDITING }
 data class HanziUiState(
     val mode: Mode = Mode.EDITING,
     val draft: String = "",
-    val lastConfirmed: String = "",
     val cells: List<CharCell> = emptyList(),
     val settings: Settings = Settings.DEFAULT,
     val detail: DetailState? = null,
@@ -67,8 +64,6 @@ data class HanziUiState(
     val loading: Boolean = false,
     /** True once the stroke shards are cached, so a confirm need not wait. */
     val warmed: Boolean = false,
-    /** True while "play all" is running, so the button can offer to stop. */
-    val playing: Boolean = false,
 ) {
     val isEmpty: Boolean get() = cells.isEmpty()
 }
@@ -79,10 +74,6 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsStore = SettingsStore(app)
     private val voiceAssets = VoiceAssets(app)
     private val audio = AudioPlayer(app, voiceAssets)
-    private val tts = TtsRepository(app)
-
-    /** The running phrase, so a new one can replace it and Stop can end it. */
-    private var playbackJob: Job? = null
 
     private val _state = MutableStateFlow(HanziUiState())
     val state: StateFlow<HanziUiState> = _state.asStateFlow()
@@ -121,6 +112,32 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onDraftChange(text: String) = _state.update { it.copy(draft = text) }
 
+    /**
+     * Replace the draft with the clipboard text.
+     *
+     * Android 10+ only hands the clip to the focused app (or the default IME),
+     * which is the case whenever a tap can arrive, so no permission or
+     * request-focus dance is needed. [ClipData.Item.coerceToText] is used
+     * rather than a cast to a plain-text item: it also covers a copied URI or
+     * Intent, and an empty clipboard has to be reported rather than silently
+     * wiping the draft.
+     */
+    fun pasteFromClipboard() {
+        val clipboard = getApplication<Application>()
+            .getSystemService(ClipboardManager::class.java)
+        val clip = clipboard?.primaryClip
+        val text = if (clip != null && clip.itemCount > 0) {
+            clip.getItemAt(0).coerceToText(getApplication()).toString()
+        } else {
+            ""
+        }
+        if (text.isEmpty()) {
+            _state.update { it.copy(message = "剪贴板没有文字") }
+            return
+        }
+        _state.update { it.copy(draft = text) }
+    }
+
     fun startEditing() = _state.update { it.copy(mode = Mode.EDITING) }
 
     fun clearDraft() = _state.update { it.copy(draft = "") }
@@ -137,7 +154,7 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         // Publish immediately: the grid frame appears at once with empty
         // character cells and the stroke data lands a moment later.
         _state.update {
-            it.copy(mode = Mode.VIEWING, lastConfirmed = text, loading = true, cells = emptyList())
+            it.copy(mode = Mode.VIEWING, loading = true, cells = emptyList())
         }
         viewModelScope.launch {
             try {
@@ -210,32 +227,10 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         Log.i(TAG, "build: total=${SystemClock.elapsedRealtime() - t0}ms")
-
-        // Now that the cells carry the chosen readings, build the audio so
-        // pressing play is instant.
-        prebuildSpeech()
     }
 
     /**
-     * Build the audio for the current text in the background.
-     *
-     * Runs on confirm and again after a polyphone switch, so the play button
-     * normally finds the audio ready. If the user presses play first,
-     * [speakAll] waits for this rather than starting a second build.
-     */
-    private fun prebuildSpeech() {
-        val s = _state.value
-        if (s.lastConfirmed.isBlank() || s.detail != null) return
-        val text = s.lastConfirmed
-        val keys = s.cells.map { cell ->
-            if (cell.isPunctuation) "" else cell.reading?.key.orEmpty()
-        }
-        viewModelScope.launch { tts.prepare(text, keys) }
-    }
-
-    /**
-     * Switch a polyphone to [index] and rebuild the audio for it, since the
-     * reading is baked into what was synthesised.
+     * Switch a polyphone to [index].
      */
     fun selectReading(charIndex: Int, index: Int) {
         _state.update { s ->
@@ -256,8 +251,6 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
-        // The reading is baked into what was synthesised, so rebuild it.
-        prebuildSpeech()
     }
 
     /** Open the detail sheet for [charIndex]. */
@@ -304,70 +297,6 @@ class HanziViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             audio.play(reading.key, cell.readings.map { it.key })
         }
-    }
-
-    /**
-     * Play the whole text.
-     *
-     * The keys come straight from the cells, never from a fresh dictionary
-     * lookup. Asking the dictionary again overrode whatever the user had
-     * selected for a polyphone, which is what made "play all" read 重 as zhòng
-     * after the user had switched it to chóng.
-     */
-    fun speakAll() {
-        val s = _state.value
-        if (s.lastConfirmed.isBlank()) return
-        val hanCells = s.cells.filter { !it.isPunctuation && it.reading != null }
-        if (hanCells.isEmpty()) return
-
-        // The text as the user typed it, so punctuation and phrasing survive,
-        // plus the chosen reading of every character in the same order.
-        val text = s.lastConfirmed
-        val keys = s.cells.map { cell ->
-            if (cell.isPunctuation) "" else cell.reading?.key.orEmpty()
-        }
-
-        // Starting a new run cancels the previous one, so pressing the button
-        // twice does not layer two playbacks on top of each other.
-        playbackJob?.cancel()
-        _state.update { it.copy(playing = true) }
-        playbackJob = viewModelScope.launch {
-            try {
-                val t0 = SystemClock.elapsedRealtime()
-                // The model reads the phrase in one voice; when it cannot spell
-                // it, the syllable library is slower but always exact on tone.
-                val spoken = tts.speak(text, keys)
-                Log.i(
-                    TAG,
-                    "speakAll: model=${if (spoken) "ok" else "unavailable"} " +
-                        "${SystemClock.elapsedRealtime() - t0}ms",
-                )
-                if (!spoken) {
-                    audio.playSequence(hanCells.map { it.reading!!.key }) { key -> keyListFor(key) }
-                }
-            } finally {
-                // Runs whether this finished on its own or was cancelled by
-                // Stop, so the button always returns to "play all". An earlier
-                // version cleared the flag only when the coroutine was still
-                // active, which left it stuck on "stop" after a cancel.
-                _state.update { it.copy(playing = false) }
-            }
-        }
-    }
-
-    /** Stop the running phrase, if any. */
-    fun stopPlaying() {
-        playbackJob?.cancel()
-        playbackJob = null
-        audio.stop()
-        tts.stop()
-        _state.update { it.copy(playing = false) }
-    }
-
-    /** Other readings of the character owning [key], for audio fallback. */
-    private fun keyListFor(key: String): List<String> {
-        val cell = _state.value.cells.firstOrNull { it.reading?.key == key } ?: return emptyList()
-        return cell.readings.map { it.key }
     }
 
     override fun onCleared() {

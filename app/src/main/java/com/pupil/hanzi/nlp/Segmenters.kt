@@ -13,7 +13,7 @@ import java.io.File
  *
  * The default [HanLP.segment] uses ViterbiSegment (dictionary shortest-path +
  * second-order HMM). This app instead loads the CRF CWS model bundled in
- * assets (hanlp_cws_crf.bin, ~12 MB) and hands [NativeTts] and
+ * assets (hanlp_cws_crf.bin, ~12 MB) and hands
  * [com.pupil.hanzi.data.PinyinService] a [CRFLexicalAnalyzer]. CRF segmentation
  * is slower but more accurate on novel word boundaries, which matters for the
  * polyphone readings that depend on where a word starts and ends.

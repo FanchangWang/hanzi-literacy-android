@@ -12,12 +12,6 @@ import android.util.Log
 import com.pupil.hanzi.data.VoiceAssets
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,11 +19,6 @@ import java.io.IOException
 
 /**
  * Plays syllable mp3s.
- *
- * This is the syllable-concatenation path from the spec. The alternative --
- * sherpa-onnx synthesising the whole sentence -- is deliberately not wired in
- * (ANDROID_IMPLEMENTATION §3.4): it needs a 115MB model plus its own lexicon to
- * control polyphones, and these assets already give exact tone accuracy.
  *
  * Each asset is a few kilobytes, so it is decoded once into memory and then
  * played back as PCM. Building a MediaPlayer per syllable meant re-opening the
@@ -50,10 +39,6 @@ class AudioPlayer(
 
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var stopJob: Job? = null
-    @Volatile private var playbackCancelled = false
 
     /** Decoded samples plus the rate they were decoded at. */
     private data class DecodedAudio(val samples: ShortArray, val sampleRate: Int)
@@ -79,36 +64,6 @@ class AudioPlayer(
         playPcm(resolved, audio)
         return resolved
     }
-
-    /**
-     * Play a phrase as a sequence of syllables, in order.
-     *
-     * A previously started playback is cancelled first, so pressing the button
-     * again while a phrase is running restarts it rather than layering a second
-     * queue on top. The syllables keep their natural speed: the assets are long
-     * but resampling them to hurry along shifts the pitch, which is worse than
-     * a slow reading for a child learning the sound.
-     */
-    fun playSequence(keys: List<String>, fallbacksFor: (String) -> List<String>) {
-        stopJob?.cancel()
-        stopJob = scope.launch {
-            Log.i(TAG, "playSequence ${keys.size}: $keys")
-            for ((i, key) in keys.withIndex()) {
-                play(key, fallbacksFor(key))
-                if (i < keys.size - 1) Thread.sleep(INTER_SYLLABLE_GAP_MS)
-            }
-            Log.i(TAG, "playSequence finished")
-        }
-    }
-
-    /** Stop whatever is playing now. */
-    fun stop() {
-        stopJob?.cancel()
-        stopJob = null
-        playbackCancelled = true
-    }
-
-    val isPlaying: Boolean get() = stopJob?.isActive == true
 
     /** Decodes the asset once and keeps the samples for later plays. */
     private suspend fun decodedFor(key: String): DecodedAudio? {
@@ -236,9 +191,8 @@ class AudioPlayer(
      * `AudioTrack.play()` is asynchronous: a MODE_STATIC track is already in
      * the PLAYING state before the first sample leaves, and only settles to
      * STOPPED once its buffer is spent. Waiting on `playState` alone returned
-     * almost immediately and truncated the syllable, which is what made "play
-     * all" stop after the first character. The written-frame count is the
-     * reliable signal.
+     * almost immediately and truncated the syllable. The written-frame count
+     * is the reliable signal.
      */
     private suspend fun playPcm(key: String, audio: DecodedAudio) = withContext(Dispatchers.IO) {
         val t = AudioTrack.Builder()
@@ -267,10 +221,8 @@ class AudioPlayer(
             // queue; 20s is far longer than any syllable.
             val deadline = System.currentTimeMillis() + PLAYBACK_TIMEOUT_MS
             while (t.playbackHeadPosition < expected && System.currentTimeMillis() < deadline) {
-                if (playbackCancelled) break
                 Thread.sleep(5)
             }
-            playbackCancelled = false
             Log.i(TAG, "played $key: ${t.playbackHeadPosition}/$expected frames")
         } catch (e: IllegalStateException) {
             Log.w(TAG, "track error during playback of $key", e)
@@ -302,7 +254,6 @@ class AudioPlayer(
     }
 
     fun release() {
-        stop()
         cache.clear()
         tts?.stop()
         tts?.shutdown()
@@ -315,8 +266,5 @@ class AudioPlayer(
         const val TIMEOUT_US = 10_000L
         const val DEFAULT_RATE = 22050
         const val PLAYBACK_TIMEOUT_MS = 20_000L
-
-        /** Short pause between syllables so a phrase does not run together. */
-        const val INTER_SYLLABLE_GAP_MS = 40L
     }
 }

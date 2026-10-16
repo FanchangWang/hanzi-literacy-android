@@ -18,12 +18,6 @@
 -keep class kotlin.sequences.** { *; }
 -dontnote kotlin.sequences.**
 
-# --- sherpa-onnx JNI: native code looks up classes/methods by exact JNI
-#     symbol names (Java_com_k2fsa_sherpa_onnx_*). Renaming them causes
-#     UnsatisfiedLinkError or wrong-method native crashes.
--keep class com.k2fsa.sherpa.onnx.** { *; }
--dontwarn com.k2fsa.sherpa.onnx.**
-
 # --- HanLP: segments text and loads dictionaries by classpath resource and
 #     reflective access.
 -keep class com.hankcs.** { *; }

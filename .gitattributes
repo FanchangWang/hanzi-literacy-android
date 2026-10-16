@@ -12,12 +12,10 @@ gradlew text eol=lf
 
 # 二进制资源：禁止行尾转换与文本 diff
 # mp3 拼音音节库约 2000 个；webp/png 启动图标；
-# ttf 字体；onnx TTS 模型；fst 词典；aar/jar 为 JNI 与 wrapper 二进制
+# ttf 字体；bin 分词模型；jar 为 wrapper 二进制
 *.mp3 binary
 *.webp binary
 *.png binary
 *.ttf binary
-*.onnx binary
-*.fst binary
-*.aar binary
+*.bin binary
 *.jar binary
