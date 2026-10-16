@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.pupil.hanzi.audio.AudioPlayer
 import com.pupil.hanzi.data.AssetRepository
 import com.pupil.hanzi.data.CharReading
+import com.pupil.hanzi.data.HistoryEntry
 import com.pupil.hanzi.data.HistoryStore
 import com.pupil.hanzi.data.PinyinReading
 import com.pupil.hanzi.data.PinyinService
@@ -62,7 +63,7 @@ data class HanziUiState(
     val detail: DetailState? = null,
     val message: String? = null,
     /** Confirmed texts, newest first. */
-    val history: List<String> = emptyList(),
+    val history: List<HistoryEntry> = emptyList(),
     /** True while the first build is running, so the UI can say so. */
     val loading: Boolean = false,
     /** True once the stroke shards are cached, so a confirm need not wait. */

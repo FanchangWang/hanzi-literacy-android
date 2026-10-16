@@ -13,9 +13,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.pupil.hanzi.data.HistoryEntry
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * The texts that were confirmed before, newest first.
@@ -25,7 +30,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun HistoryList(
-    history: List<String>,
+    history: List<HistoryEntry>,
     onStudy: (String) -> Unit,
     onEdit: (String) -> Unit,
     onDelete: (String) -> Unit,
@@ -44,45 +49,53 @@ fun HistoryList(
     LazyColumn(modifier = modifier) {
         // The text is the entry's identity: recording the same text twice
         // moves it instead of adding a second copy, so keys stay unique.
-        items(history, key = { it }) { text ->
-            HistoryEntry(
-                text = text,
-                onStudy = { onStudy(text) },
-                onEdit = { onEdit(text) },
-                onDelete = { onDelete(text) },
+        items(history, key = { it.text }) { entry ->
+            HistoryRow(
+                entry = entry,
+                onStudy = { onStudy(entry.text) },
+                onEdit = { onEdit(entry.text) },
+                onDelete = { onDelete(entry.text) },
             )
         }
     }
 }
 
 /**
- * One stored text with what can be done to it.
+ * One stored text with when it was confirmed and what can be done to it.
  *
  * Two lines of text at most: a stored paragraph is a reminder of what it was,
  * not something to read here -- 「学习」 opens it in the grid, 「编辑」 puts it
- * back in the field.
+ * back in the field. Deleting sits on its own at the left, away from the two
+ * actions that open the text.
  */
 @Composable
-private fun HistoryEntry(
-    text: String,
+private fun HistoryRow(
+    entry: HistoryEntry,
     onStudy: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        // An entry stored before times were kept has none to show.
+        if (entry.timeMillis > 0L) {
+            Text(
+                text = formatHistoryTime(entry.timeMillis),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = text,
+            text = entry.text,
             style = MaterialTheme.typography.bodyLarge,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = 2.dp),
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onStudy) { Text("学习") }
-            TextButton(onClick = onEdit) { Text("编辑") }
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(
@@ -91,7 +104,17 @@ private fun HistoryEntry(
             ) {
                 Text("删除")
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onEdit) { Text("编辑") }
+                TextButton(onClick = onStudy) { Text("学习") }
+            }
         }
         HorizontalDivider()
     }
 }
+
+private val HISTORY_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+/** The wall-clock time of a stored entry, in the device's zone. */
+private fun formatHistoryTime(millis: Long): String =
+    Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(HISTORY_TIME_FORMAT)

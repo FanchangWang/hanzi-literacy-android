@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pupil.hanzi.data.HistoryEntry
 import com.pupil.hanzi.data.Settings
 
 /**
@@ -266,7 +267,7 @@ private fun SettingsBar(
 @Composable
 private fun EditingPane(
     draft: String,
-    history: List<String>,
+    history: List<HistoryEntry>,
     wide: Boolean,
     onDraftChange: (String) -> Unit,
     onClear: () -> Unit,

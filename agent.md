@@ -29,7 +29,7 @@
 | 语言 / UI | Kotlin 2.4.21 + Jetpack Compose（Material 3） |
 | 构建 | AGP 9.4.1 / Gradle 9.8 / JDK 17 / compileSdk 37 / minSdk 31 |
 | 模块 | 单模块 `:app` |
-| 测试 | 47 个单元测试，`:app:testDebugUnitTest` |
+| 测试 | 48 个单元测试，`:app:testDebugUnitTest` |
 | 网络权限 | **无。** 所有数据随包分发 |
 
 ### 关键依赖
@@ -54,7 +54,7 @@ app/src/main/
 │   │   ├── PinyinService.kt     汉字判定、带调拼音拼装
 │   │   ├── StrokeData.kt        笔顺数据结构
 │   │   ├── SettingsStore.kt     DataStore 持久化四个开关（默认全开）
-│   │   ├── HistoryStore.kt      DataStore 持久化确认过的文字（JSON 数组，最多 50 条）
+│   │   ├── HistoryStore.kt      DataStore 持久化确认过的文字（JSON，含时间，最多 30 条）
 │   │   └── VoiceAssets.kt       音节 mp3 的存在性探测
 │   ├── nlp/Segmenters.kt        CRF 分词模型的加载与回退
 │   ├── audio/AudioPlayer.kt     音节 mp3 解码播放
@@ -152,7 +152,7 @@ while (track.playbackHeadPosition < pcm.size) { /* ... */ }
 
 ```bash
 ./gradlew :app:assembleDebug          # 构建 APK
-./gradlew :app:testDebugUnitTest      # 47 个单元测试
+./gradlew :app:testDebugUnitTest      # 48 个单元测试
 ./gradlew :app:assembleRelease        # 发布包，输出到 app/build/outputs/apk/release/
 ```
 
